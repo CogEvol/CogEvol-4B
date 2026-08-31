@@ -1,8 +1,8 @@
 diff --git a/app/api/generate/scene-content/route.ts b/app/api/generate/scene-content/route.ts
-index 9b116e0..60bdeb3 100644
+index d3ac5809..13e964cd 100644
 --- a/app/api/generate/scene-content/route.ts
 +++ b/app/api/generate/scene-content/route.ts
-@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
+@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
        allOutlines,
        pdfImages,
        imageMapping,
@@ -11,10 +11,13 @@ index 9b116e0..60bdeb3 100644
        stageId,
        agents,
        languageDirective,
-@@ -146,6 +146,16 @@ export async function POST(req: NextRequest) {
-       `Generating content: "${effectiveOutline.title}" (${effectiveOutline.type}) [model=${modelString}]`,
-     );
+@@ -321,6 +321,19 @@ export async function POST(req: NextRequest) {
  
+     const userLocale = req.headers?.get('x-user-locale') ?? '';
+ 
++    // Course context for the runtime page-brief expander (CogEvol on-device
++    // patch): stage name/description plus the full outline with the current
++    // page position, so expansion can stay consistent with the whole course.
 +    const outlineIndex = allOutlines.findIndex((o) => o.id === effectiveOutline.id);
 +    const courseContext = [
 +      stageInfo?.name ? `课程: ${stageInfo.name}` : '',
@@ -27,96 +30,25 @@ index 9b116e0..60bdeb3 100644
 +
      const content = await generateSceneContent(effectiveOutline, aiCall, {
        assignedImages,
-       imageMapping,
-@@ -155,6 +165,7 @@ export async function POST(req: NextRequest) {
+       imageMapping: visionImageMapping,
+@@ -329,6 +342,7 @@ export async function POST(req: NextRequest) {
+       resolvedVisionImages,
        agents,
        languageDirective,
-       thinkingConfig,
 +      courseContext,
-     });
- 
-     if (!content) {
-diff --git a/app/api/quota/consume/route.ts b/app/api/quota/consume/route.ts
-index 0c90fb3..f1e5b5d 100644
---- a/app/api/quota/consume/route.ts
-+++ b/app/api/quota/consume/route.ts
-@@ -4,8 +4,9 @@ import { getDataProvider } from '@/lib/data/provider';
- 
- const TRIAL_COOKIE = 'trial_remaining';
- const AUTH_COOKIE = 'auth_token';
--const MAX_FREE_GENERATIONS = 3;
--const MAX_DAILY_GENERATIONS = 10;
-+// Local on-device demo build: unlimited generations (upstream trial gate disabled).
-+const MAX_FREE_GENERATIONS = 9999;
-+const MAX_DAILY_GENERATIONS = 9999;
- 
- /**
-  * POST /api/quota/consume — called after successful generation.
-@@ -37,10 +38,9 @@ export async function POST(request: NextRequest) {
- 
-   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
-   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
--  if (isNaN(remaining) || remaining < 0) remaining = 0;
--
--  if (remaining <= 0) {
--    return NextResponse.json({ error: 'trial_exhausted', remaining: 0 }, { status: 403 });
-+  if (isNaN(remaining) || remaining <= 0) {
-+    // Local demo build: heal exhausted/stale trial cookies instead of blocking.
-+    remaining = MAX_FREE_GENERATIONS;
-   }
- 
-   const newRemaining = remaining - 1;
-diff --git a/app/api/quota/route.ts b/app/api/quota/route.ts
-index cc7c00d..1fe14c3 100644
---- a/app/api/quota/route.ts
-+++ b/app/api/quota/route.ts
-@@ -4,8 +4,9 @@ import { getDataProvider } from '@/lib/data/provider';
- 
- const TRIAL_COOKIE = 'trial_remaining';
- const AUTH_COOKIE = 'auth_token';
--const MAX_FREE_GENERATIONS = 3;
--const MAX_DAILY_GENERATIONS = 10;
-+// Local on-device demo build: unlimited generations (upstream trial gate disabled).
-+const MAX_FREE_GENERATIONS = 9999;
-+const MAX_DAILY_GENERATIONS = 9999;
- 
- /**
-  * GET /api/quota — returns current quota status for the client.
-@@ -30,11 +31,21 @@ export async function GET(request: NextRequest) {
- 
-   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
-   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
--  if (isNaN(remaining) || remaining < 0) remaining = 0;
-+  if (isNaN(remaining) || remaining < 0) remaining = MAX_FREE_GENERATIONS;
-+  // Local demo build: heal exhausted/stale trial cookies instead of blocking.
-+  if (remaining < MAX_FREE_GENERATIONS) remaining = MAX_FREE_GENERATIONS;
- 
--  return NextResponse.json({
-+  const response = NextResponse.json({
-     authenticated: false,
-     remaining,
-     total: MAX_FREE_GENERATIONS,
-   });
-+  response.cookies.set(TRIAL_COOKIE, String(remaining), {
-+    path: '/',
-+    httpOnly: true,
-+    secure: process.env.NODE_ENV === 'production',
-+    sameSite: 'lax',
-+    maxAge: 60 * 60 * 24 * 365,
-+  });
-+  return response;
- }
-diff --git a/lib/generation/brief-expander.ts b/lib/generation/brief-expander.ts
+       targetLanguage: userLocale || undefined,
+       userRequirements: requirements,
+       allowProceduralSkill: vocationalActive,
+diff --git a/packages/@openmaic/generation/src/brief-expander.ts b/packages/@openmaic/generation/src/brief-expander.ts
 new file mode 100644
-index 0000000..cc76cb7
+index 00000000..93cff6d5
 --- /dev/null
-+++ b/lib/generation/brief-expander.ts
-@@ -0,0 +1,113 @@
++++ b/packages/@openmaic/generation/src/brief-expander.ts
+@@ -0,0 +1,112 @@
 +/**
 + * Page Brief Expander
 + *
-+ * Runtime port of the eval/slide-layout page-brief idea
-+ * (eval/slide-layout/scripts/lib/ppt-page-brief-writer.ts): that tool
++ * Runtime port of the eval/slide-layout page-brief idea: that tool
 + * reconstructs detailed per-page briefs offline to build training pairs;
 + * this module does the same authoring job at runtime — turning the short
 + * outline (title + 1-2 sentence description + keyPoints) into a detailed,
@@ -126,11 +58,10 @@ index 0000000..cc76cb7
 + * falls back to the raw outline fields.
 + */
 +
-+import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
-+import { parseJsonResponse } from './json-repair';
-+import { createLogger } from '@/lib/logger';
-+
-+const log = createLogger('BriefExpander');
++import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
++import { parseJsonResponse } from './json-repair.js';
++import type { GenerationLogger } from './logger.js';
++import { noopGenerationLogger } from './logger.js';
 +
 +export interface ExpandableOutline {
 +  title: string;
@@ -153,8 +84,9 @@ index 0000000..cc76cb7
 +export async function expandPageBrief(
 +  outline: ExpandableOutline,
 +  aiCall: (system: string, user: string) => Promise<string>,
-+  options?: { languageDirective?: string; courseContext?: string },
++  options?: { languageDirective?: string; courseContext?: string; logger?: GenerationLogger },
 +): Promise<ExpandedPageBrief | null> {
++  const log = options?.logger ?? noopGenerationLogger;
 +  try {
 +    const isWidget = !!outline.widgetType;
 +    const widgetSection = isWidget
@@ -225,18 +157,27 @@ index 0000000..cc76cb7
 +    return null;
 +  }
 +}
-diff --git a/lib/generation/interactive-post-processor.ts b/lib/generation/interactive-post-processor.ts
-index b24def9..0d4be7d 100644
---- a/lib/generation/interactive-post-processor.ts
-+++ b/lib/generation/interactive-post-processor.ts
-@@ -22,9 +22,57 @@ export function postProcessInteractiveHtml(html: string): string {
+diff --git a/packages/@openmaic/generation/src/interactive-post-processor.ts b/packages/@openmaic/generation/src/interactive-post-processor.ts
+index a40f423b..60304de9 100644
+--- a/packages/@openmaic/generation/src/interactive-post-processor.ts
++++ b/packages/@openmaic/generation/src/interactive-post-processor.ts
+@@ -6,6 +6,8 @@
+  * Handles:
+  * - LaTeX delimiter conversion ($$...$$ -> \[...\], $...$ -> \(...\))
+  * - KaTeX CSS/JS injection with auto-render and MutationObserver
++ * - Offline safety: CDN references rewritten to local mirrors, remaining
++ *   external scripts/styles stripped (CogEvol on-device patch)
+  * - Script tag protection during LaTeX conversion
+  */
+ 
+@@ -22,9 +24,57 @@ export function postProcessInteractiveHtml(html: string): string {
      processed = injectKatex(processed);
    }
  
-+  // Offline safety: the demo device runs with no network access. Rewrite CDN
-+  // references that have local mirrors to same-origin paths, then strip any
-+  // remaining external scripts/stylesheets so the page degrades gracefully
-+  // instead of hanging or rendering unstyled.
++  // Offline safety: the on-device demo runs with no network access. Rewrite
++  // CDN references that have local mirrors to same-origin paths, then strip
++  // any remaining external scripts/stylesheets so the page degrades
++  // gracefully instead of hanging or rendering unstyled.
 +  processed = localizeExternalResources(processed);
 +  processed = stripExternalResources(processed);
 +
@@ -287,7 +228,7 @@ index b24def9..0d4be7d 100644
  /**
   * Convert LaTeX delimiters while protecting <script> tags.
   *
-@@ -72,9 +120,9 @@ function convertLatexDelimiters(html: string): string {
+@@ -69,9 +119,9 @@ function convertLatexDelimiters(html: string): string {
   */
  function injectKatex(html: string): string {
    const katexInjection = `
@@ -300,75 +241,104 @@ index b24def9..0d4be7d 100644
  <script>
  document.addEventListener("DOMContentLoaded", function() {
      const katexOptions = {
-diff --git a/lib/generation/scene-generator.ts b/lib/generation/scene-generator.ts
-index 33d3457..55cbddd 100644
---- a/lib/generation/scene-generator.ts
-+++ b/lib/generation/scene-generator.ts
-@@ -26,6 +26,7 @@ import type { StageStore } from '@/lib/api/stage-api';
- import { createStageAPI } from '@/lib/api/stage-api';
- import { generatePBLContent } from '@/lib/pbl/generate-pbl';
- import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
-+import { expandPageBrief } from './brief-expander';
- import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
- import { postProcessInteractiveHtml } from './interactive-post-processor';
- import { parseActionsFromStructuredOutput } from './action-parser';
-@@ -71,6 +72,8 @@ export interface SceneContentOptions {
-   agents?: AgentInfo[];
-   languageDirective?: string;
-   thinkingConfig?: ThinkingConfig;
+diff --git a/packages/@openmaic/generation/src/prompts/index.ts b/packages/@openmaic/generation/src/prompts/index.ts
+index 1cd2c0a0..140671ff 100644
+--- a/packages/@openmaic/generation/src/prompts/index.ts
++++ b/packages/@openmaic/generation/src/prompts/index.ts
+@@ -12,6 +12,7 @@ export {
+ 
+ export const PROMPT_IDS = {
+   REQUIREMENTS_TO_OUTLINES: 'requirements-to-outlines',
++  PAGE_BRIEF_EXPANDER: 'page-brief-expander',
+   SLIDE_CONTENT: 'slide-content',
+   QUIZ_CONTENT: 'quiz-content',
+   SIMULATION_CONTENT: 'simulation-content',
+diff --git a/packages/@openmaic/generation/src/prompts/types.ts b/packages/@openmaic/generation/src/prompts/types.ts
+index f76a3669..35a5b994 100644
+--- a/packages/@openmaic/generation/src/prompts/types.ts
++++ b/packages/@openmaic/generation/src/prompts/types.ts
+@@ -5,6 +5,7 @@
+ /** Prompt template identifier for generation-owned prompts. */
+ export type PromptId =
+   | 'requirements-to-outlines'
++  | 'page-brief-expander'
+   | 'slide-content'
+   | 'quiz-content'
+   | 'simulation-content'
+diff --git a/packages/@openmaic/generation/src/scene-generator.ts b/packages/@openmaic/generation/src/scene-generator.ts
+index afe0fb32..de9abfe0 100644
+--- a/packages/@openmaic/generation/src/scene-generator.ts
++++ b/packages/@openmaic/generation/src/scene-generator.ts
+@@ -31,6 +31,7 @@ import type {
+ } from './outline-types.js';
+ import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator.js';
+ import { postProcessInteractiveHtml } from './interactive-post-processor.js';
++import { expandPageBrief } from './brief-expander.js';
+ import { parseActionsFromStructuredOutput } from './action-parser.js';
+ import { parseJsonResponse } from './json-repair.js';
+ import {
+@@ -109,6 +110,8 @@ export interface SceneContentOptions {
+   /** Optional host fallback for the app-only loop planner. */
+   pblLoopFallback?: (input: PBLPlannerV2Input) => Promise<PBLProject>;
+   logger?: GenerationLogger;
 +  /** One-paragraph course context (stage name + outline titles) for brief expansion */
 +  courseContext?: string;
  }
  
  export interface SceneActionsOptions {
-@@ -293,6 +296,7 @@ export async function generateSceneContent(
-     agents,
-     languageDirective,
-     thinkingConfig,
+@@ -242,6 +245,7 @@ export async function generateSceneContent(
+     allowProceduralSkill = false,
+     editDirective,
+     baselineContent,
 +    courseContext,
    } = options;
  
    // Unified path for interactive scenes (both normal and ultra mode)
-@@ -316,7 +320,7 @@ export async function generateSceneContent(
-     }
- 
-     // Route to widget generation (handles all 5 types)
--    return generateWidgetContent(outline, aiCall, languageDirective);
-+    return generateWidgetContent(outline, aiCall, languageDirective, courseContext);
+@@ -268,6 +272,7 @@ export async function generateSceneContent(
+     return generateWidgetContent(outline, aiCall, languageDirective, {
+       allowProceduralSkill,
+       logger: log,
++      courseContext,
+     });
    }
  
-   switch (outline.type) {
-@@ -330,6 +334,7 @@ export async function generateSceneContent(
-         generatedMediaMapping,
-         agents,
-         languageDirective,
+@@ -286,6 +291,7 @@ export async function generateSceneContent(
+         editDirective,
+         baselineContent,
+         log,
 +        courseContext,
        );
      case 'quiz':
-       return generateQuizContent(outline, aiCall, languageDirective);
-@@ -606,6 +611,7 @@ async function generateSlideContent(
-   generatedMediaMapping?: ImageMapping,
-   agents?: AgentInfo[],
-   languageDirective?: string,
+       return generateQuizContent(outline, aiCall, languageDirective, log);
+@@ -603,6 +609,7 @@ async function generateSlideContent(
+   editDirective?: string,
+   baselineContent?: GeneratedSlideContent,
+   log: GenerationLogger = noopGenerationLogger,
 +  courseContext?: string,
  ): Promise<GeneratedSlideContent | null> {
    // Build assigned images description for the prompt
    let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
-@@ -677,9 +683,21 @@ async function generateSlideContent(
+@@ -697,9 +704,27 @@ async function generateSlideContent(
  
    const teacherContext = formatTeacherPersonaForPrompt(agents);
  
-+  // Expand the short outline into a detailed page brief before generation
-+  // (falls back to the raw description when expansion fails)
-+  const expandedBrief = await expandPageBrief(
-+    {
-+      title: outline.title,
-+      description: outline.description,
-+      keyPoints: outline.keyPoints,
-+    },
-+    aiCall,
-+    { languageDirective, courseContext },
-+  );
++  // Expand the short outline into a detailed page brief before generation,
++  // opt-in via courseContext (the on-device app always provides it; library
++  // consumers keep the previous behavior). Falls back to the raw description
++  // when expansion fails; skipped in edit mode, where the baseline slide —
++  // not the outline — is the source of truth.
++  const expandedBrief =
++    editDirective || !courseContext
++      ? null
++      : await expandPageBrief(
++          {
++            title: outline.title,
++            description: outline.description,
++            keyPoints: outline.keyPoints,
++          },
++          aiCall,
++          { languageDirective, courseContext, logger: log },
++        );
 +
    const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
      title: outline.title,
@@ -377,34 +347,42 @@ index 33d3457..55cbddd 100644
      keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
      elements: '（根据要点自动生成）',
      assignedImages: assignedImagesText,
-@@ -970,6 +988,7 @@ async function generateWidgetContent(
+@@ -1103,7 +1128,11 @@ export async function generateWidgetContent(
    outline: SceneOutline,
    aiCall: AICallFn,
    languageDirective?: string,
-+  courseContext?: string,
+-  options: { allowProceduralSkill?: boolean; logger?: GenerationLogger } = {},
++  options: {
++    allowProceduralSkill?: boolean;
++    logger?: GenerationLogger;
++    courseContext?: string;
++  } = {},
  ): Promise<GeneratedInteractiveContent | null> {
+   const log = options.logger ?? noopGenerationLogger;
    const widgetType = outline.widgetType;
-   const widgetOutline = outline.widgetOutline;
-@@ -979,6 +998,26 @@ async function generateWidgetContent(
+@@ -1114,6 +1143,29 @@ export async function generateWidgetContent(
      return null;
    }
  
-+  // Expand the short outline into detailed widget slots before generation
-+  // (falls back to the raw outline fields when expansion fails)
-+  const expanded = await expandPageBrief(
-+    {
-+      title: outline.title,
-+      description: outline.description,
-+      keyPoints: outline.keyPoints,
-+      widgetType,
-+      widgetOutline: {
-+        concept: widgetOutline.concept,
-+        keyVariables: widgetOutline.keyVariables,
-+      },
-+    },
-+    aiCall,
-+    { languageDirective, courseContext },
-+  );
++  // Expand the short outline into detailed widget slots before generation,
++  // opt-in via courseContext (falls back to the raw outline fields when
++  // expansion fails)
++  const expanded = options.courseContext
++    ? await expandPageBrief(
++        {
++          title: outline.title,
++          description: outline.description,
++          keyPoints: outline.keyPoints,
++          widgetType,
++          widgetOutline: {
++            concept: widgetOutline.concept,
++            keyVariables: widgetOutline.keyVariables,
++          },
++        },
++        aiCall,
++        { languageDirective, courseContext: options.courseContext, logger: log },
++      )
++    : null;
 +  const enrichedOverview = expanded?.conceptOverview || outline.description;
 +  const enrichedKeyPoints = expanded?.keyPoints?.length ? expanded.keyPoints : outline.keyPoints;
 +  const enrichedDesignIdea = expanded?.designIdea || '';
@@ -412,7 +390,7 @@ index 33d3457..55cbddd 100644
    // Select appropriate prompt based on widget type
    let promptId: PromptId;
    let variables: Record<string, unknown>;
-@@ -988,10 +1027,14 @@ async function generateWidgetContent(
+@@ -1123,10 +1175,14 @@ export async function generateWidgetContent(
        promptId = PROMPT_IDS.SIMULATION_CONTENT;
        variables = {
          conceptName: widgetOutline.concept || outline.title,
@@ -431,7 +409,7 @@ index 33d3457..55cbddd 100644
          languageDirective: languageDirective || '',
        };
        break;
-@@ -1001,8 +1044,8 @@ async function generateWidgetContent(
+@@ -1137,8 +1193,8 @@ export async function generateWidgetContent(
        variables = {
          title: outline.title,
          diagramType: widgetOutline.diagramType || 'flowchart',
@@ -439,10 +417,10 @@ index 33d3457..55cbddd 100644
 -        keyPoints: (outline.keyPoints || []).join('\n'),
 +        description: enrichedOverview,
 +        keyPoints: (enrichedKeyPoints || []).join('\n'),
-         languageDirective: languageDirective || '',
-       };
-       break;
-@@ -1012,8 +1055,8 @@ async function generateWidgetContent(
+         nodeCount: widgetOutline.nodeCount ?? prescribedNodes.length,
+         prescribedNodes,
+         hasNodeCount: typeof widgetOutline.nodeCount === 'number' && widgetOutline.nodeCount > 0,
+@@ -1153,8 +1209,8 @@ export async function generateWidgetContent(
        variables = {
          title: outline.title,
          programmingLanguage: widgetOutline.language || 'python',
@@ -453,7 +431,7 @@ index 33d3457..55cbddd 100644
          starterCode: '',
          testCases: '', // AI generates appropriate test cases based on challenge
          hints: '', // AI generates progressive hints based on challenge
-@@ -1026,8 +1069,8 @@ async function generateWidgetContent(
+@@ -1167,8 +1223,8 @@ export async function generateWidgetContent(
        variables = {
          title: outline.title,
          gameType: widgetOutline.gameType || 'quiz',
@@ -464,7 +442,7 @@ index 33d3457..55cbddd 100644
          scoring: { correctPoints: 10, speedBonus: 5 },
          languageDirective: languageDirective || '',
        };
-@@ -1038,8 +1081,8 @@ async function generateWidgetContent(
+@@ -1179,8 +1235,8 @@ export async function generateWidgetContent(
        variables = {
          title: outline.title,
          visualizationType: widgetOutline.visualizationType || 'custom',
@@ -475,23 +453,11 @@ index 33d3457..55cbddd 100644
          objects: widgetOutline.objects || [],
          interactions: widgetOutline.interactions || [],
          languageDirective: languageDirective || '',
-diff --git a/lib/prompts/index.ts b/lib/prompts/index.ts
-index a1acf02..bdb2f7d 100644
---- a/lib/prompts/index.ts
-+++ b/lib/prompts/index.ts
-@@ -27,6 +27,7 @@ export const PROMPT_IDS = {
-   REQUIREMENTS_TO_OUTLINES: 'requirements-to-outlines',
-   INTERACTIVE_OUTLINES: 'interactive-outlines',
-   WEB_SEARCH_QUERY_REWRITE: 'web-search-query-rewrite',
-+  PAGE_BRIEF_EXPANDER: 'page-brief-expander',
-   SLIDE_CONTENT: 'slide-content',
-   QUIZ_CONTENT: 'quiz-content',
-   SLIDE_ACTIONS: 'slide-actions',
-diff --git a/lib/prompts/templates/page-brief-expander/system.md b/lib/prompts/templates/page-brief-expander/system.md
+diff --git a/packages/@openmaic/generation/templates/page-brief-expander/system.md b/packages/@openmaic/generation/templates/page-brief-expander/system.md
 new file mode 100644
-index 0000000..9f8715f
+index 00000000..369f7188
 --- /dev/null
-+++ b/lib/prompts/templates/page-brief-expander/system.md
++++ b/packages/@openmaic/generation/templates/page-brief-expander/system.md
 @@ -0,0 +1,30 @@
 +# Page Brief Expander（页面需求扩写器）
 +
@@ -523,11 +489,12 @@ index 0000000..9f8715f
 +- designIdea：200-400 字，具体的交互设计：控件与参数（含取值范围与默认值）、预设场景、可视化主体、状态与反馈。
 +- keyPoints：4-6 条本页核心知识点（可在大纲基础上扩充）。
 +- variables：simulation 类型列出应暴露给学生的可调参数名（3-5 个）；其他互动类型给空数组。
-diff --git a/lib/prompts/templates/page-brief-expander/user.md b/lib/prompts/templates/page-brief-expander/user.md
+\ No newline at end of file
+diff --git a/packages/@openmaic/generation/templates/page-brief-expander/user.md b/packages/@openmaic/generation/templates/page-brief-expander/user.md
 new file mode 100644
-index 0000000..b43d44b
+index 00000000..ecd0708b
 --- /dev/null
-+++ b/lib/prompts/templates/page-brief-expander/user.md
++++ b/packages/@openmaic/generation/templates/page-brief-expander/user.md
 @@ -0,0 +1,22 @@
 +# 待扩写的页面大纲
 +
@@ -551,46 +518,28 @@ index 0000000..b43d44b
 +---
 +
 +请把这份大纲扩写成具体、可直接执行的制作需求，按系统指令只输出一个 JSON 对象。
-diff --git a/lib/prompts/types.ts b/lib/prompts/types.ts
-index 90abe34..97dd70a 100644
---- a/lib/prompts/types.ts
-+++ b/lib/prompts/types.ts
-@@ -9,6 +9,7 @@ export type PromptId =
-   | 'requirements-to-outlines'
-   | 'interactive-outlines'
-   | 'web-search-query-rewrite'
-+  | 'page-brief-expander'
-   | 'slide-content'
-   | 'quiz-content'
-   | 'slide-actions'
-diff --git a/middleware.ts b/middleware.ts
-index 33d2b81..2e158b1 100644
---- a/middleware.ts
-+++ b/middleware.ts
-@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
- // --- Live Demo: trial quota constants ---
- const TRIAL_COOKIE = 'trial_remaining';
- const AUTH_COOKIE = 'auth_token';
--const MAX_FREE_GENERATIONS = 3;
-+// Local on-device demo build: unlimited generations (upstream trial gate disabled).
-+const MAX_FREE_GENERATIONS = 9999;
+\ No newline at end of file
+diff --git a/packages/@openmaic/generation/test/assets.test.ts b/packages/@openmaic/generation/test/assets.test.ts
+index d9212b39..facb195d 100644
+--- a/packages/@openmaic/generation/test/assets.test.ts
++++ b/packages/@openmaic/generation/test/assets.test.ts
+@@ -14,6 +14,7 @@ const PBL_PROMPT_FILES = [
  
- // --- Upstream: ACCESS_CODE helpers ---
- 
-@@ -108,14 +109,8 @@ export async function middleware(request: NextRequest) {
-   // Read remaining trial count (read-only check)
-   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
-   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
--  if (isNaN(remaining) || remaining < 0) remaining = 0;
--
--  if (remaining <= 0) {
--    return NextResponse.json(
--      { error: 'trial_exhausted', message: 'Free trial exhausted. Please login to continue.' },
--      { status: 403 },
--    );
--  }
-+  // Local demo build: heal exhausted/stale trial cookies instead of blocking.
-+  if (isNaN(remaining) || remaining <= 0) remaining = MAX_FREE_GENERATIONS;
- 
-   return NextResponse.next();
- }
+ const PROMPT_IDS = [
+   'requirements-to-outlines',
++  'page-brief-expander',
+   'slide-content',
+   'quiz-content',
+   'simulation-content',
+diff --git a/packages/@openmaic/generation/test/type-surface.test.ts b/packages/@openmaic/generation/test/type-surface.test.ts
+index 5508eac9..7639e780 100644
+--- a/packages/@openmaic/generation/test/type-surface.test.ts
++++ b/packages/@openmaic/generation/test/type-surface.test.ts
+@@ -28,6 +28,7 @@ type _SceneContentKeys = Assert<
+     | 'baselineContent'
+     | 'pblLoopFallback'
+     | 'logger'
++    | 'courseContext'
+   >
+ >;
+ type _SceneActionKeys = Assert<

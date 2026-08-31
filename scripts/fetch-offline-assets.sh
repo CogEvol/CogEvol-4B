@@ -2,16 +2,16 @@
 # Mirror the third-party runtime assets that generated interactive widgets
 # reference, so the OpenMAIC app works with WiFi switched off.
 #
-# Usage: ./fetch-offline-assets.sh /path/to/openmaic-live
+# Usage: ./fetch-offline-assets.sh /path/to/OpenMAIC
 #
-# What it installs into <openmaic-live>/public:
+# What it installs into <OpenMAIC>/public:
 #   /katex/...                       copied from node_modules/katex (exact version the app uses)
 #   /libs/tailwind/tailwindcss.js    Tailwind Play CDN runtime (widgets emit <script src="https://cdn.tailwindcss.com">)
 #   /libs/codemirror/5.65.12/...     CodeMirror (code widgets)
 # The post-processor added by our patch rewrites those CDN URLs to these
 # same-origin paths and strips every other external reference.
 set -e
-APP="${1:?usage: fetch-offline-assets.sh /path/to/openmaic-live}"
+APP="${1:?usage: fetch-offline-assets.sh /path/to/OpenMAIC}"
 [ -d "$APP/node_modules/katex" ] || { echo "katex not installed — run 'pnpm install' in $APP first"; exit 1; }
 
 # 1) KaTeX from local node_modules (no network needed)

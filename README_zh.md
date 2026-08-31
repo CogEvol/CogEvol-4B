@@ -17,7 +17,7 @@
 - 📦 单文件量化：**Q4_K_M GGUF，2.4 GB** —— Apple Silicon / CUDA / 纯 CPU 皆可通过 llama.cpp 运行
 - ⚡ **MacBook Pro M2 Pro（16 GB）实测：生成 ~33 tok/s、prefill ~470 tok/s** —— 约 6 分钟生成一门完整互动课程，无需 GPU 集群、无需 API Key
 - 🔌 **推理零外部依赖**：模型、应用、静态资源全部本地。下文的演示流程是在关闭 WiFi 的状态下录制的
-- 🎓 与 [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) 开箱即用（`.env` 配本地 provider 即可），另附补丁增加运行时 brief 扩写器与全程断网渲染（见第 7 节）
+- 🎓 与 [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) 开箱即用（`.env.local` 配本地 provider 即可），另附补丁增加运行时 brief 扩写器与全程断网渲染（见第 7 节）
 
 | 模型 | 链接 | 协议 |
 |---|---|---|
@@ -86,11 +86,11 @@ CogEvol-4B/
 ├── CITATION.cff                   # GitHub「Cite this repository」
 ├── scripts/
 │   ├── serve.sh                   # 用验证过的参数启动 llama-server
-│   ├── apply-openmaic-patch.sh    # 给 openmaic-live 检出目录打补丁 + 写 .env
+│   ├── apply-openmaic-patch.sh    # 给 OpenMAIC 检出目录打补丁 + 写 .env.local
 │   └── fetch-offline-assets.sh    # 本地化 katex/tailwind/codemirror（断网渲染用）
 ├── patches/
-│   ├── openmaic-live/
-│   │   └── openmaic-live-offline-on-device.patch   # 改 8 个文件、新增 3 个
+│   ├── openmaic/
+│   │   └── openmaic-offline-on-device.patch     # brief 扩写器 + 断网组件（对公开 main，10 个文件）
 │   └── llama-cpp/
 │       └── macos13-metal-buffer-fix.md             # GGML_ASSERT(buf_dst) 崩溃修复
 ├── eval/
@@ -237,23 +237,25 @@ pnpm start          # http://localhost:3000
 provider），输入课程需求（如 `用互动模拟教我单摆运动，包含可调节摆长和重力的实验`），
 进入课堂即可。
 
-### 路径 B —— 端侧补丁（brief 扩写器 + 断网组件渲染 + 配额解锁）
+### 路径 B —— 端侧补丁（brief 扩写器 + 断网组件渲染）
 
-原版应用直接用大纲的**简短条目**（标题 + 一两句描述）生成每页。我们的补丁（在
-录制端侧演示的那台设备上端到端验证过）额外做三件事：
+原版应用直接用大纲的**简短条目**（标题 + 一两句描述）生成每页。我们的补丁基于公开
+OpenMAIC commit `f6cf8fd4`（2026-08-30）验证，上游自己的测试套件保持全绿
+（`packages/@openmaic/generation` 136/136）：
 
 1. **新增运行时 brief 扩写器**（`page-brief-expander` prompt）：在 slide / 组件生成
    之前，把简短条目先扩写成详实、以内容为先的 brief。这是 4B 模型在该应用里最大的
-   质量杠杆，与我们训练 / 评测数据的 brief 写法对齐；
+   质量杠杆，与我们训练 / 评测数据的 brief 写法对齐。扩写是**选择性开启**的：只有
+   route 提供课程上下文时才运行（打过补丁的 `scene-content` route 一直提供），包的
+   其他使用方行为不变；
 2. **让生成的互动组件断网可渲染**：KaTeX 改由应用自身同源提供，模型输出的
-   Tailwind / CodeMirror CDN 引用重写到本地镜像，其余外链一律剥离（见第 8 节）；
-3. **解除本地演示的次数闸**（线上托管版对匿名用户限制生成次数；自托管演示无意义，
-   补丁改为不限量）。
+   Tailwind / CodeMirror CDN 引用重写到本地镜像，其余外链一律剥离（见第 8 节）。
 
 ```bash
-git clone <你的 OpenMAIC 检出> && cd OpenMAIC    # 兼容性说明见下
+git clone https://github.com/THU-MAIC/OpenMAIC && cd OpenMAIC
+git checkout f6cf8fd4                   # 补丁验证所基于的 commit
 
-/path/to/CogEvol-4B/scripts/apply-openmaic-patch.sh .   # 打补丁 + 写 .env
+/path/to/CogEvol-4B/scripts/apply-openmaic-patch.sh .   # 打补丁 + 写 .env.local
 /path/to/CogEvol-4B/scripts/fetch-offline-assets.sh .   # katex/tailwind/codemirror → public/
 
 pnpm install
@@ -261,13 +263,10 @@ pnpm build
 pnpm start -- -p 3200      # http://localhost:3200
 ```
 
-> **兼容性说明。** 补丁（`patches/openmaic-live/openmaic-live-offline-on-device.patch`）
-> 是标准 unified diff，基于 `openmaic-live` 应用构建的 commit `667c6af7`（2026-07-22）
-> 验证。公开 OpenMAIC 仓库在 2026 年 8 月重构（生成代码移入
-> `packages/@openmaic/generation`，PR #1090），且从未包含托管版的配额路由，因此补丁
-> **不适用于当前公开 `main`** —— `apply-openmaic-patch.sh` 会先 dry-run，检出有漂移
-> 会明确报错。重构前的检出也可能需要手工微调部分 hunk。跑原版应用请走路径 A；
-> 向新目录结构的移植在我们计划中。
+> **上游更新之后。** 补丁涉及 10 个文件、以新增为主；若更新的 OpenMAIC commit 已
+> 漂移，`apply-openmaic-patch.sh` 会先 dry-run 并明确报错。要么钉在 `f6cf8fd4`，
+> 要么手工重放补丁 —— CI 每次推送都会对钉定基线复检，补丁漂移会响亮失败而不是
+> 静默失效。
 
 ### 两条路都会看到
 
@@ -280,7 +279,7 @@ pnpm start -- -p 3200      # http://localhost:3200
 完成第 6、7 节（路径 B）后，以下流程**关掉 WiFi 也能跑** —— 这正是录制端侧演示用的流程：
 
 1. `scripts/serve.sh` —— 模型加载，`/health` 返回 200；
-2. `pnpm start` —— 应用启动（确认 `.env` 里没有云厂商 Key；应用补丁脚本写的是干净的）；
+2. `pnpm start` —— 应用启动（确认 `.env.local` 里没有云厂商 Key；应用补丁脚本写的是干净的）；
 3. 生成一门课程，打开互动场景；
 4. 关 WiFi → 再生成一门 → 依然全流程可用，样式和 LaTeX 公式都在。
 
@@ -349,8 +348,7 @@ python3 html_eval.py --port 8081 \
 | HTML 生成到一半被截断 | 调大 `-c`（≥ 24576），请求 `max_tokens` 16384 |
 | 应用里出现云厂商供应商 / 走了网络 | `.env.local` 缺 `OLLAMA_*` 配置（第 7 节路径 A）；确认没配云厂商 Key |
 | 组件无样式、屏幕上出现 `\( ... \)` 原码 | 断网资源未安装 → 跑 `fetch-offline-assets.sh`，重新 build 应用 |
-| 打过补丁的应用仍报 403 `trial_exhausted` | 补丁没打上 —— 配额修复在 `middleware.ts` 里 |
-| `apply-openmaic-patch.sh` 报漂移 | 检出不是验证过的基线 —— 见第 7 节路径 B 的兼容性说明 |
+| `apply-openmaic-patch.sh` 报漂移 | 检出比验证基线新 —— 钉在 `f6cf8fd4` 或手工重放补丁（第 7 节路径 B） |
 | 对 127.0.0.1 的请求莫名 502 | 本地代理劫持 —— `export no_proxy=127.0.0.1,localhost` |
 | 服务"起来了"但生成迟迟不开始 | `/health` 返回的是 503 不是 200 —— 按精确状态码轮询 |
 

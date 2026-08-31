@@ -17,7 +17,7 @@
 - 📦 One quantized file: **Q4_K_M GGUF, 2.4 GB** — runs on Apple Silicon / any CUDA or CPU box via llama.cpp
 - ⚡ **~33 tok/s generation / ~470 tok/s prefill on a MacBook Pro M2 Pro (16 GB)** — a full interactive course in ~6 minutes, no GPU cluster, no API keys
 - 🔌 **Zero external dependencies at inference**: model + app + assets all local. The demo below runs with WiFi switched off
-- 🎓 Works with [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) out of the box (local provider via `.env`), plus a patch that adds a runtime *brief expander* and fully-offline widget rendering (§7)
+- 🎓 Works with [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) out of the box (local provider via `.env.local`), plus a patch that adds a runtime *brief expander* and fully-offline widget rendering (§7)
 
 | Model | Link | License |
 |---|---|---|
@@ -87,11 +87,11 @@ CogEvol-4B/
 ├── CITATION.cff                   # GitHub "Cite this repository"
 ├── scripts/
 │   ├── serve.sh                   # start llama-server with the validated flags
-│   ├── apply-openmaic-patch.sh    # patch an openmaic-live checkout + write .env
+│   ├── apply-openmaic-patch.sh    # patch an OpenMAIC checkout + write .env.local
 │   └── fetch-offline-assets.sh    # mirror katex/tailwind/codemirror for offline widgets
 ├── patches/
-│   ├── openmaic-live/
-│   │   └── openmaic-live-offline-on-device.patch   # 8 files modified, 3 added
+│   ├── openmaic/
+│   │   └── openmaic-offline-on-device.patch     # brief expander + offline widgets (10 files vs public main)
 │   └── llama-cpp/
 │       └── macos13-metal-buffer-fix.md             # GGML_ASSERT(buf_dst) crash fix
 ├── eval/
@@ -242,25 +242,27 @@ In the app, pick `cogevol-4b-q4_k_m` from the model selector (with no cloud keys
 is the only provider), type a course brief such as
 `用互动模拟教我单摆运动，包含可调节摆长和重力的实验`, and enter the classroom.
 
-### Path B — the on-device patch (brief expander + offline widgets + quota unlock)
+### Path B — the on-device patch (brief expander + offline widgets)
 
 Stock, the app generates each page from the *thin* outline entry (title + 1–2 sentences).
-Our patch — validated end-to-end on the device used for the offline demo — additionally:
+Our patch, validated against public OpenMAIC commit `f6cf8fd4` (2026-08-30) — upstream's
+own test suite stays green (136/136 in `packages/@openmaic/generation`):
 
 1. **Adds a runtime *brief expander*** — a `page-brief-expander` prompt that upgrades each
    thin outline entry into a detailed, content-first brief before slide/widget generation.
    This is the single biggest quality lever for a 4B model in this app and mirrors how our
-   training/eval briefs were authored;
+   training/eval briefs were authored. It is opt-in: expansion only runs when the route
+   supplies course context (the patched `scene-content` route always does), so library
+   consumers of the generation package keep the previous behavior;
 2. **Makes generated interactive widgets render offline**: KaTeX is served from the app
    itself, the Tailwind/CodeMirror CDNs the model emits are rewritten to local mirrors,
-   and any remaining external reference is stripped (see §8);
-3. **Unlocks the local-demo quota gate** (the hosted build limits anonymous generations;
-   meaningless for a self-hosted demo, so patched to unlimited).
+   and any remaining external reference is stripped (see §8).
 
 ```bash
-git clone <your OpenMAIC checkout> && cd OpenMAIC    # see compatibility note below
+git clone https://github.com/THU-MAIC/OpenMAIC && cd OpenMAIC
+git checkout f6cf8fd4                   # the commit the patch is validated against
 
-/path/to/CogEvol-4B/scripts/apply-openmaic-patch.sh .   # patch + write .env
+/path/to/CogEvol-4B/scripts/apply-openmaic-patch.sh .   # patch + write .env.local
 /path/to/CogEvol-4B/scripts/fetch-offline-assets.sh .   # katex/tailwind/codemirror → public/
 
 pnpm install
@@ -268,14 +270,10 @@ pnpm build
 pnpm start -- -p 3200      # http://localhost:3200
 ```
 
-> **Compatibility note.** The patch (`patches/openmaic-live/openmaic-live-offline-on-device.patch`)
-> is a plain unified diff validated against the `openmaic-live` app build at commit
-> `667c6af7` (2026-07-22). The public OpenMAIC repo restructured in August 2026
-> (generation code moved to `packages/@openmaic/generation`, PR #1090) and never carried
-> the hosted-build quota routes, so the patch **does not apply to current public `main`** —
-> `apply-openmaic-patch.sh` dry-runs first and tells you if your checkout has drifted.
-> On pre-restructure checkouts some hunks may still need manual adjustment. Use Path A
-> for the stock app; we are tracking a port of the patch to the current layout.
+> **When upstream moves.** The patch touches 10 files and is mostly additive; if a newer
+> OpenMAIC commit has drifted, `apply-openmaic-patch.sh` dry-runs first and tells you.
+> Either pin to `f6cf8fd4`, or rebase the patch by hand — CI re-checks the pinned base on
+> every push, so a drifted patch fails loudly instead of silently.
 
 ### What you should see (either path)
 
@@ -289,7 +287,7 @@ After §6 + §7 (Path B), everything below runs **with WiFi off** — this is th
 record the on-device demo:
 
 1. `scripts/serve.sh` — model loads, `/health` returns 200;
-2. `pnpm start` — app boots (make sure no cloud provider keys are set in `.env`;
+2. `pnpm start` — app boots (make sure no cloud provider keys are set in `.env.local`;
    the apply script writes a clean one);
 3. Generate a course; open the interactive scene;
 4. Kill WiFi → generate another course → it still works, styles and LaTeX included.
@@ -364,8 +362,7 @@ controls clickable).
 | Generation cut off mid-HTML | Raise `-c` (≥ 24576) and request `max_tokens` 16384 |
 | App shows cloud providers / tries the network | `.env.local` lacks the `OLLAMA_*` block (§7 Path A); make sure no cloud keys are set |
 | Widgets unstyled, raw `\( ... \)` LaTeX on screen | Offline assets not installed → run `fetch-offline-assets.sh`, rebuild the app |
-| 403 `trial_exhausted` in a *patched* app | Patch not applied — the quota fix lives in `middleware.ts` |
-| `apply-openmaic-patch.sh` reports drift | Your checkout isn't the validated base — see the compatibility note in §7 Path B |
+| `apply-openmaic-patch.sh` reports drift | Your checkout is newer than the validated base — pin `f6cf8fd4` or rebase the patch (README §7 Path B) |
 | Requests to 127.0.0.1 mysteriously 502 | Local proxy hijack — export `no_proxy=127.0.0.1,localhost` |
 | Server "up" but generations never start | `/health` was 503, not 200 — poll for the exact code |
 

@@ -20,7 +20,7 @@ on a laptop**: no GPU cluster, no API keys, no cloud dependencies.
   Python eval scripts are stdlib-only on purpose (they must run on a bare
   laptop). Adding a pip dependency needs a strong reason.
 - **Patch changes must state their base.** If you touch
-  `patches/openmaic-live/*.patch`, record which commit it was generated
+  `patches/openmaic/*.patch`, record which upstream commit it was generated
   against and update the compatibility note in README §7.
 
 ## Before opening a PR
@@ -36,7 +36,7 @@ for p in glob.glob("eval/samples/*.jsonl"):
     assert rows, p
     print(p, len(rows))
 EOF
-git apply --stat patches/openmaic-live/openmaic-live-offline-on-device.patch  # diff parses
+git apply --stat patches/openmaic/openmaic-offline-on-device.patch  # diff parses
 ```
 
 CI runs the same checks on every push and pull request.

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # The OpenMAIC commit the on-device patch is validated against. Bump this
+  # together with patches/openmaic/openmaic-offline-on-device.patch.
+  OPENMAIC_BASE: f6cf8fd4b74ac83ea969e88b6dc2c974931b4d65
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -37,9 +42,16 @@ jobs:
               print(f"{path}: {len(rows)} rows OK")
           EOF
 
-      - name: OpenMAIC patch is a well-formed unified diff
+      - name: OpenMAIC patch applies to the pinned upstream commit
         working-directory: ${{ runner.temp }}
         run: |
-          git apply --stat  "$GITHUB_WORKSPACE/patches/openmaic-live/openmaic-live-offline-on-device.patch" > /dev/null
-          git apply --numstat "$GITHUB_WORKSPACE/patches/openmaic-live/openmaic-live-offline-on-device.patch" > /dev/null
-          echo "patch parses OK"
+          git clone --quiet https://github.com/THU-MAIC/OpenMAIC.git openmaic
+          git -C openmaic checkout --quiet "$OPENMAIC_BASE"
+          git -C openmaic apply --check "$GITHUB_WORKSPACE/patches/openmaic/openmaic-offline-on-device.patch"
+          git -C openmaic apply --stat "$GITHUB_WORKSPACE/patches/openmaic/openmaic-offline-on-device.patch" | tail -2
+          echo "patch applies cleanly to $OPENMAIC_BASE"
+
+      - name: llama.cpp patch note references a real file path
+        run: |
+          grep -q "ggml-metal-context.m" patches/llama-cpp/macos13-metal-buffer-fix.md
+          echo "llama.cpp patch note OK"
