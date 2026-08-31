@@ -1,0 +1,596 @@
+diff --git a/app/api/generate/scene-content/route.ts b/app/api/generate/scene-content/route.ts
+index 9b116e0..60bdeb3 100644
+--- a/app/api/generate/scene-content/route.ts
++++ b/app/api/generate/scene-content/route.ts
+@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
+       allOutlines,
+       pdfImages,
+       imageMapping,
+-      stageInfo: _stageInfo,
++      stageInfo,
+       stageId,
+       agents,
+       languageDirective,
+@@ -146,6 +146,16 @@ export async function POST(req: NextRequest) {
+       `Generating content: "${effectiveOutline.title}" (${effectiveOutline.type}) [model=${modelString}]`,
+     );
+ 
++    const outlineIndex = allOutlines.findIndex((o) => o.id === effectiveOutline.id);
++    const courseContext = [
++      stageInfo?.name ? `课程: ${stageInfo.name}` : '',
++      stageInfo?.description ? `课程简介: ${stageInfo.description}` : '',
++      `课程页面: ${allOutlines.map((o) => o.title).join(' → ')}`,
++      outlineIndex >= 0 ? `当前是第 ${outlineIndex + 1}/${allOutlines.length} 页` : '',
++    ]
++      .filter(Boolean)
++      .join('\n');
++
+     const content = await generateSceneContent(effectiveOutline, aiCall, {
+       assignedImages,
+       imageMapping,
+@@ -155,6 +165,7 @@ export async function POST(req: NextRequest) {
+       agents,
+       languageDirective,
+       thinkingConfig,
++      courseContext,
+     });
+ 
+     if (!content) {
+diff --git a/app/api/quota/consume/route.ts b/app/api/quota/consume/route.ts
+index 0c90fb3..f1e5b5d 100644
+--- a/app/api/quota/consume/route.ts
++++ b/app/api/quota/consume/route.ts
+@@ -4,8 +4,9 @@ import { getDataProvider } from '@/lib/data/provider';
+ 
+ const TRIAL_COOKIE = 'trial_remaining';
+ const AUTH_COOKIE = 'auth_token';
+-const MAX_FREE_GENERATIONS = 3;
+-const MAX_DAILY_GENERATIONS = 10;
++// Local on-device demo build: unlimited generations (upstream trial gate disabled).
++const MAX_FREE_GENERATIONS = 9999;
++const MAX_DAILY_GENERATIONS = 9999;
+ 
+ /**
+  * POST /api/quota/consume — called after successful generation.
+@@ -37,10 +38,9 @@ export async function POST(request: NextRequest) {
+ 
+   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
+   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
+-  if (isNaN(remaining) || remaining < 0) remaining = 0;
+-
+-  if (remaining <= 0) {
+-    return NextResponse.json({ error: 'trial_exhausted', remaining: 0 }, { status: 403 });
++  if (isNaN(remaining) || remaining <= 0) {
++    // Local demo build: heal exhausted/stale trial cookies instead of blocking.
++    remaining = MAX_FREE_GENERATIONS;
+   }
+ 
+   const newRemaining = remaining - 1;
+diff --git a/app/api/quota/route.ts b/app/api/quota/route.ts
+index cc7c00d..1fe14c3 100644
+--- a/app/api/quota/route.ts
++++ b/app/api/quota/route.ts
+@@ -4,8 +4,9 @@ import { getDataProvider } from '@/lib/data/provider';
+ 
+ const TRIAL_COOKIE = 'trial_remaining';
+ const AUTH_COOKIE = 'auth_token';
+-const MAX_FREE_GENERATIONS = 3;
+-const MAX_DAILY_GENERATIONS = 10;
++// Local on-device demo build: unlimited generations (upstream trial gate disabled).
++const MAX_FREE_GENERATIONS = 9999;
++const MAX_DAILY_GENERATIONS = 9999;
+ 
+ /**
+  * GET /api/quota — returns current quota status for the client.
+@@ -30,11 +31,21 @@ export async function GET(request: NextRequest) {
+ 
+   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
+   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
+-  if (isNaN(remaining) || remaining < 0) remaining = 0;
++  if (isNaN(remaining) || remaining < 0) remaining = MAX_FREE_GENERATIONS;
++  // Local demo build: heal exhausted/stale trial cookies instead of blocking.
++  if (remaining < MAX_FREE_GENERATIONS) remaining = MAX_FREE_GENERATIONS;
+ 
+-  return NextResponse.json({
++  const response = NextResponse.json({
+     authenticated: false,
+     remaining,
+     total: MAX_FREE_GENERATIONS,
+   });
++  response.cookies.set(TRIAL_COOKIE, String(remaining), {
++    path: '/',
++    httpOnly: true,
++    secure: process.env.NODE_ENV === 'production',
++    sameSite: 'lax',
++    maxAge: 60 * 60 * 24 * 365,
++  });
++  return response;
+ }
+diff --git a/lib/generation/brief-expander.ts b/lib/generation/brief-expander.ts
+new file mode 100644
+index 0000000..cc76cb7
+--- /dev/null
++++ b/lib/generation/brief-expander.ts
+@@ -0,0 +1,113 @@
++/**
++ * Page Brief Expander
++ *
++ * Runtime port of the eval/slide-layout page-brief idea
++ * (eval/slide-layout/scripts/lib/ppt-page-brief-writer.ts): that tool
++ * reconstructs detailed per-page briefs offline to build training pairs;
++ * this module does the same authoring job at runtime — turning the short
++ * outline (title + 1-2 sentence description + keyPoints) into a detailed,
++ * self-contained generation brief before content generation runs.
++ *
++ * Fail-closed: any parse/validation failure returns null and the caller
++ * falls back to the raw outline fields.
++ */
++
++import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
++import { parseJsonResponse } from './json-repair';
++import { createLogger } from '@/lib/logger';
++
++const log = createLogger('BriefExpander');
++
++export interface ExpandableOutline {
++  title: string;
++  description?: string;
++  keyPoints?: string[];
++  widgetType?: string;
++  widgetOutline?: { concept?: string; keyVariables?: string[] } | undefined;
++}
++
++export interface ExpandedPageBrief {
++  /** Slide path: full hq3-style generation request */
++  brief?: string;
++  /** Widget path: enriched slots for the {type}-content templates */
++  conceptOverview?: string;
++  designIdea?: string;
++  keyPoints?: string[];
++  variables?: string[];
++}
++
++export async function expandPageBrief(
++  outline: ExpandableOutline,
++  aiCall: (system: string, user: string) => Promise<string>,
++  options?: { languageDirective?: string; courseContext?: string },
++): Promise<ExpandedPageBrief | null> {
++  try {
++    const isWidget = !!outline.widgetType;
++    const widgetSection = isWidget
++      ? [
++          '- **输出形态**: 互动页（conceptOverview / designIdea / keyPoints / variables）',
++          `- **组件类型**: ${outline.widgetType}`,
++          `- **组件概念**: ${outline.widgetOutline?.concept || outline.title}`,
++          `- **候选变量**: ${(outline.widgetOutline?.keyVariables ?? []).join('、') || '无'}`,
++        ].join('\n')
++      : '- **输出形态**: 普通页（brief）';
++
++    const prompts = buildPrompt(PROMPT_IDS.PAGE_BRIEF_EXPANDER, {
++      title: outline.title,
++      pageType: outline.widgetType ? `interactive / ${outline.widgetType}` : 'slide',
++      widgetSection,
++      description: outline.description || '',
++      keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
++      courseContext: options?.courseContext || '',
++      languageDirective: options?.languageDirective || '',
++    });
++    if (!prompts) {
++      log.warn(`Failed to build brief expander prompt for "${outline.title}"`);
++      return null;
++    }
++
++    const response = await aiCall(prompts.system, prompts.user);
++    const parsed = parseJsonResponse<ExpandedPageBrief>(response);
++    if (!parsed) {
++      log.warn(
++        `Brief expansion returned unparseable response for "${outline.title}": ${response.slice(0, 200)}`,
++      );
++      return null;
++    }
++
++    // Small models sometimes rename conceptOverview to content/overview — accept aliases.
++    const record = parsed as Record<string, unknown>;
++    if (!parsed.conceptOverview) {
++      const alias = record.content ?? record.overview;
++      if (typeof alias === 'string' && alias.trim()) parsed.conceptOverview = alias.trim();
++    }
++
++    if (isWidget) {
++      const coLen = parsed.conceptOverview?.length ?? 0;
++      const diLen = parsed.designIdea?.length ?? 0;
++      if (coLen < 50 || diLen < 50) {
++        log.warn(
++          `Brief expansion too short for "${outline.title}" (conceptOverview=${coLen}, designIdea=${diLen}), falling back to raw outline`,
++        );
++        return null;
++      }
++    } else {
++      const briefLen = parsed.brief?.length ?? 0;
++      if (briefLen < 100) {
++        log.warn(
++          `Brief expansion too short for "${outline.title}" (brief=${briefLen}), falling back to raw outline: ${(parsed.brief ?? '').slice(0, 200)}`,
++        );
++        return null;
++      }
++    }
++
++    const size = parsed.brief?.length ?? parsed.conceptOverview?.length ?? 0;
++    log.info(
++      `Brief expanded for "${outline.title}" (${outline.widgetType ?? 'slide'}): ~${size} chars`,
++    );
++    return parsed;
++  } catch (error) {
++    log.warn(`Brief expansion failed for "${outline.title}", falling back to raw outline:`, error);
++    return null;
++  }
++}
+diff --git a/lib/generation/interactive-post-processor.ts b/lib/generation/interactive-post-processor.ts
+index b24def9..0d4be7d 100644
+--- a/lib/generation/interactive-post-processor.ts
++++ b/lib/generation/interactive-post-processor.ts
+@@ -22,9 +22,57 @@ export function postProcessInteractiveHtml(html: string): string {
+     processed = injectKatex(processed);
+   }
+ 
++  // Offline safety: the demo device runs with no network access. Rewrite CDN
++  // references that have local mirrors to same-origin paths, then strip any
++  // remaining external scripts/stylesheets so the page degrades gracefully
++  // instead of hanging or rendering unstyled.
++  processed = localizeExternalResources(processed);
++  processed = stripExternalResources(processed);
++
+   return processed;
+ }
+ 
++/**
++ * Rewrite CDN references with local mirrors (served from /public) to
++ * same-origin URLs so widgets work fully offline.
++ */
++function localizeExternalResources(html: string): string {
++  return (
++    html
++      // Tailwind Play CDN → local bundle (/libs/tailwind/tailwindcss.js)
++      .replace(
++        /(src=["'])https?:\/\/cdn\.tailwindcss\.com[^"']*(["'])/gi,
++        '$1/libs/tailwind/tailwindcss.js$2',
++      )
++      // KaTeX on jsDelivr (any version) → local dist (/katex/...)
++      .replace(
++        /((?:src|href)=["'])https?:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^/]+\/dist\/([^"']+)(["'])/gi,
++        '$1/katex/$2$3',
++      )
++      // CodeMirror on cdnjs → local mirror (/libs/codemirror/<ver>/...)
++      .replace(
++        /https?:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/codemirror\/([\d.]+)\//gi,
++        '/libs/codemirror/$1/',
++      )
++  );
++}
++
++/**
++ * Remove references to remaining external http(s) resources so the widget
++ * renders fully offline. Inline <script>/<style> content is untouched.
++ */
++function stripExternalResources(html: string): string {
++  return (
++    html
++      // <script src="https://..."></script> (e.g. Pyodide, three.js, web fonts)
++      .replace(/<script[^>]*\ssrc=["']https?:\/\/[^"']*["'][^>]*>\s*<\/script>/gi, '')
++      // <link rel="stylesheet|preconnect" href="https://..."> and font links
++      .replace(/<link[^>]*\shref=["']https?:\/\/[^"']*["'][^>]*\/?>/gi, '')
++      // @import url(https://...) inside <style> blocks
++      .replace(/@import\s+url\(["']?https?:\/\/[^"')]+\)["']?\s*;?/gi, '')
++  );
++}
++
+ /**
+  * Convert LaTeX delimiters while protecting <script> tags.
+  *
+@@ -72,9 +120,9 @@ function convertLatexDelimiters(html: string): string {
+  */
+ function injectKatex(html: string): string {
+   const katexInjection = `
+-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
++<link rel="stylesheet" href="/katex/katex.min.css">
++<script src="/katex/katex.min.js"></script>
++<script src="/katex/contrib/auto-render.min.js"></script>
+ <script>
+ document.addEventListener("DOMContentLoaded", function() {
+     const katexOptions = {
+diff --git a/lib/generation/scene-generator.ts b/lib/generation/scene-generator.ts
+index 33d3457..55cbddd 100644
+--- a/lib/generation/scene-generator.ts
++++ b/lib/generation/scene-generator.ts
+@@ -26,6 +26,7 @@ import type { StageStore } from '@/lib/api/stage-api';
+ import { createStageAPI } from '@/lib/api/stage-api';
+ import { generatePBLContent } from '@/lib/pbl/generate-pbl';
+ import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
++import { expandPageBrief } from './brief-expander';
+ import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
+ import { postProcessInteractiveHtml } from './interactive-post-processor';
+ import { parseActionsFromStructuredOutput } from './action-parser';
+@@ -71,6 +72,8 @@ export interface SceneContentOptions {
+   agents?: AgentInfo[];
+   languageDirective?: string;
+   thinkingConfig?: ThinkingConfig;
++  /** One-paragraph course context (stage name + outline titles) for brief expansion */
++  courseContext?: string;
+ }
+ 
+ export interface SceneActionsOptions {
+@@ -293,6 +296,7 @@ export async function generateSceneContent(
+     agents,
+     languageDirective,
+     thinkingConfig,
++    courseContext,
+   } = options;
+ 
+   // Unified path for interactive scenes (both normal and ultra mode)
+@@ -316,7 +320,7 @@ export async function generateSceneContent(
+     }
+ 
+     // Route to widget generation (handles all 5 types)
+-    return generateWidgetContent(outline, aiCall, languageDirective);
++    return generateWidgetContent(outline, aiCall, languageDirective, courseContext);
+   }
+ 
+   switch (outline.type) {
+@@ -330,6 +334,7 @@ export async function generateSceneContent(
+         generatedMediaMapping,
+         agents,
+         languageDirective,
++        courseContext,
+       );
+     case 'quiz':
+       return generateQuizContent(outline, aiCall, languageDirective);
+@@ -606,6 +611,7 @@ async function generateSlideContent(
+   generatedMediaMapping?: ImageMapping,
+   agents?: AgentInfo[],
+   languageDirective?: string,
++  courseContext?: string,
+ ): Promise<GeneratedSlideContent | null> {
+   // Build assigned images description for the prompt
+   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
+@@ -677,9 +683,21 @@ async function generateSlideContent(
+ 
+   const teacherContext = formatTeacherPersonaForPrompt(agents);
+ 
++  // Expand the short outline into a detailed page brief before generation
++  // (falls back to the raw description when expansion fails)
++  const expandedBrief = await expandPageBrief(
++    {
++      title: outline.title,
++      description: outline.description,
++      keyPoints: outline.keyPoints,
++    },
++    aiCall,
++    { languageDirective, courseContext },
++  );
++
+   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
+     title: outline.title,
+-    description: outline.description,
++    description: expandedBrief?.brief || outline.description,
+     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+     elements: '（根据要点自动生成）',
+     assignedImages: assignedImagesText,
+@@ -970,6 +988,7 @@ async function generateWidgetContent(
+   outline: SceneOutline,
+   aiCall: AICallFn,
+   languageDirective?: string,
++  courseContext?: string,
+ ): Promise<GeneratedInteractiveContent | null> {
+   const widgetType = outline.widgetType;
+   const widgetOutline = outline.widgetOutline;
+@@ -979,6 +998,26 @@ async function generateWidgetContent(
+     return null;
+   }
+ 
++  // Expand the short outline into detailed widget slots before generation
++  // (falls back to the raw outline fields when expansion fails)
++  const expanded = await expandPageBrief(
++    {
++      title: outline.title,
++      description: outline.description,
++      keyPoints: outline.keyPoints,
++      widgetType,
++      widgetOutline: {
++        concept: widgetOutline.concept,
++        keyVariables: widgetOutline.keyVariables,
++      },
++    },
++    aiCall,
++    { languageDirective, courseContext },
++  );
++  const enrichedOverview = expanded?.conceptOverview || outline.description;
++  const enrichedKeyPoints = expanded?.keyPoints?.length ? expanded.keyPoints : outline.keyPoints;
++  const enrichedDesignIdea = expanded?.designIdea || '';
++
+   // Select appropriate prompt based on widget type
+   let promptId: PromptId;
+   let variables: Record<string, unknown>;
+@@ -988,10 +1027,14 @@ async function generateWidgetContent(
+       promptId = PROMPT_IDS.SIMULATION_CONTENT;
+       variables = {
+         conceptName: widgetOutline.concept || outline.title,
+-        conceptOverview: outline.description,
+-        keyPoints: (outline.keyPoints || []).join('\n'),
+-        variables: widgetOutline.keyVariables?.join(', ') || '',
+-        designIdea: '',
++        conceptOverview: enrichedOverview,
++        keyPoints: (enrichedKeyPoints || []).join('\n'),
++        variables:
++          (expanded?.variables?.length
++            ? expanded.variables
++            : widgetOutline.keyVariables
++          )?.join(', ') || '',
++        designIdea: enrichedDesignIdea,
+         languageDirective: languageDirective || '',
+       };
+       break;
+@@ -1001,8 +1044,8 @@ async function generateWidgetContent(
+       variables = {
+         title: outline.title,
+         diagramType: widgetOutline.diagramType || 'flowchart',
+-        description: outline.description,
+-        keyPoints: (outline.keyPoints || []).join('\n'),
++        description: enrichedOverview,
++        keyPoints: (enrichedKeyPoints || []).join('\n'),
+         languageDirective: languageDirective || '',
+       };
+       break;
+@@ -1012,8 +1055,8 @@ async function generateWidgetContent(
+       variables = {
+         title: outline.title,
+         programmingLanguage: widgetOutline.language || 'python',
+-        description: outline.description,
+-        keyPoints: (outline.keyPoints || []).join('\n'),
++        description: enrichedOverview,
++        keyPoints: (enrichedKeyPoints || []).join('\n'),
+         starterCode: '',
+         testCases: '', // AI generates appropriate test cases based on challenge
+         hints: '', // AI generates progressive hints based on challenge
+@@ -1026,8 +1069,8 @@ async function generateWidgetContent(
+       variables = {
+         title: outline.title,
+         gameType: widgetOutline.gameType || 'quiz',
+-        description: outline.description,
+-        keyPoints: (outline.keyPoints || []).join('\n'),
++        description: enrichedOverview,
++        keyPoints: (enrichedKeyPoints || []).join('\n'),
+         scoring: { correctPoints: 10, speedBonus: 5 },
+         languageDirective: languageDirective || '',
+       };
+@@ -1038,8 +1081,8 @@ async function generateWidgetContent(
+       variables = {
+         title: outline.title,
+         visualizationType: widgetOutline.visualizationType || 'custom',
+-        description: outline.description,
+-        keyPoints: (outline.keyPoints || []).join('\n'),
++        description: enrichedOverview,
++        keyPoints: (enrichedKeyPoints || []).join('\n'),
+         objects: widgetOutline.objects || [],
+         interactions: widgetOutline.interactions || [],
+         languageDirective: languageDirective || '',
+diff --git a/lib/prompts/index.ts b/lib/prompts/index.ts
+index a1acf02..bdb2f7d 100644
+--- a/lib/prompts/index.ts
++++ b/lib/prompts/index.ts
+@@ -27,6 +27,7 @@ export const PROMPT_IDS = {
+   REQUIREMENTS_TO_OUTLINES: 'requirements-to-outlines',
+   INTERACTIVE_OUTLINES: 'interactive-outlines',
+   WEB_SEARCH_QUERY_REWRITE: 'web-search-query-rewrite',
++  PAGE_BRIEF_EXPANDER: 'page-brief-expander',
+   SLIDE_CONTENT: 'slide-content',
+   QUIZ_CONTENT: 'quiz-content',
+   SLIDE_ACTIONS: 'slide-actions',
+diff --git a/lib/prompts/templates/page-brief-expander/system.md b/lib/prompts/templates/page-brief-expander/system.md
+new file mode 100644
+index 0000000..9f8715f
+--- /dev/null
++++ b/lib/prompts/templates/page-brief-expander/system.md
+@@ -0,0 +1,30 @@
++# Page Brief Expander（页面需求扩写器）
++
++你是一名专业的课程页面需求撰写者。用户会给你一份**简短的页面大纲**（标题、描述、要点，互动页还附带组件信息），你的任务是把这份大纲**扩写成一份具体、可直接执行的制作需求（brief）**，供下一步的页面生成模型使用。
++
++## 扩写原则
++
++1. **忠实于大纲**：保留大纲中的全部事实、术语、数字与教学意图；可以基于学科常识做合理的教学设计补充（举例、对比、步骤拆解、常见误区），但不得编造与主题无关的内容。
++2. **给文字而不是给排版**：slide 页把大纲扩成每个区块的**具体文字原文**（标题、条目、说明、公式与标注文字），让生成模型直接上屏；互动页把大纲扩成具体的交互规格（控件、参数、预设、反馈）。
++3. **互动页要写交互规格**：控件（滑杆/按钮/下拉）、每个可调参数的名称与合理取值范围及默认值、至少 2-3 个预设场景、可视化主体是什么、运行/暂停/重置等状态与反馈。
++4. **不写实现细节**：不要出现具体颜色值、字体、字号、像素坐标、代码片段；只描述语义层面的内容与交互。
++5. **语言**：跟随语言要求输出。
++
++## 输出格式
++
++只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释文字。**字段名必须与下文完全一致，不得增删字段。** 每个字段都要写出完整、具体的内容，**禁止用"……"或占位符省略**。
++
++**普通页面（slide）**——字段必须恰好是 brief 一个。brief 不是排版说明，而是**这一页的完整文字内容稿**：把大纲扩成每个区块的具体文字（原文），让生成模型直接把这些文字放进页面元素。**本环境没有任何图片素材，brief 严禁出现"示意图、插图、照片、配图、图片占位"等图片类区块——图示类信息一律改写成文字形式（反应式、步骤流程、带标注的条目）。**示例（主题仅为格式示范，实际内容必须来自用户大纲）：
++
++{"brief": "本页文字内容如下。标题区：主标题《光合作用》，副标题“把阳光变成食物的能量之旅”。左栏要点区，共三条：① 原料：二氧化碳和水；② 条件：光照与叶绿体；③ 产物：储存能量的有机物和氧气。右栏反应式区，用文字分三行写出总反应式：“原料：二氧化碳 + 水”“条件：光照、叶绿体”“产物：有机物（储存能量）+ 氧气”。底部横条误区对比：误区“植物晚上不呼吸”｜事实“呼吸全天进行，白天光合作用更强所以释放氧气”。"}
++
++要求：brief 必须不少于 250 字；每个区块都要写出**要上屏的具体文字原文**（标题、条目、说明、公式、标注），禁止只写"放一个示意图""文字描述与对比"这类不含具体文字的描述，也禁止要求插入任何图片或图片占位。
++
++**互动页面（interactive）**——字段必须恰好是以下四个，不得有 brief 字段。示例（主题仅为格式示范，实际内容必须来自用户大纲）：
++
++{"conceptOverview": "本互动页用可调初速度与发射角的抛体运动动画，帮助学生理解射程与飞行时间如何随参数变化：学生拖动滑块设定参数并发射，观察轨迹形状与落点变化。", "designIdea": "左侧控制面板含两个滑块：初速度 v0（5–50 m/s，默认 20）、发射角 θ（5°–85°，默认 45°），配「最大射程」「45° 对比」「月球表面」三个预设按钮；右侧为轨迹画布，实时显示射程、最大高度与飞行时间；按钮负责发射/暂停/重置，上次轨迹保留作对比。", "keyPoints": ["轨迹是抛物线", "45° 时射程最远", "重力越小射程越大"], "variables": ["初速度 v0", "发射角 θ"]}
++
++- conceptOverview：150-300 字，讲清这个互动页演示的概念、教学目标与学生将观察到什么。字段名必须是 conceptOverview（不要写成 content 或 overview）。
++- designIdea：200-400 字，具体的交互设计：控件与参数（含取值范围与默认值）、预设场景、可视化主体、状态与反馈。
++- keyPoints：4-6 条本页核心知识点（可在大纲基础上扩充）。
++- variables：simulation 类型列出应暴露给学生的可调参数名（3-5 个）；其他互动类型给空数组。
+diff --git a/lib/prompts/templates/page-brief-expander/user.md b/lib/prompts/templates/page-brief-expander/user.md
+new file mode 100644
+index 0000000..b43d44b
+--- /dev/null
++++ b/lib/prompts/templates/page-brief-expander/user.md
+@@ -0,0 +1,22 @@
++# 待扩写的页面大纲
++
++- **页面标题**: {{title}}
++- **页面类型**: {{pageType}}
++{{widgetSection}}
++- **原始描述**: {{description}}
++- **原始要点**:
++{{keyPoints}}
++
++{{#if courseContext}}
++# 课程上下文
++
++{{courseContext}}
++
++{{/if}}
++# 语言要求
++
++{{languageDirective}}
++
++---
++
++请把这份大纲扩写成具体、可直接执行的制作需求，按系统指令只输出一个 JSON 对象。
+diff --git a/lib/prompts/types.ts b/lib/prompts/types.ts
+index 90abe34..97dd70a 100644
+--- a/lib/prompts/types.ts
++++ b/lib/prompts/types.ts
+@@ -9,6 +9,7 @@ export type PromptId =
+   | 'requirements-to-outlines'
+   | 'interactive-outlines'
+   | 'web-search-query-rewrite'
++  | 'page-brief-expander'
+   | 'slide-content'
+   | 'quiz-content'
+   | 'slide-actions'
+diff --git a/middleware.ts b/middleware.ts
+index 33d2b81..2e158b1 100644
+--- a/middleware.ts
++++ b/middleware.ts
+@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
+ // --- Live Demo: trial quota constants ---
+ const TRIAL_COOKIE = 'trial_remaining';
+ const AUTH_COOKIE = 'auth_token';
+-const MAX_FREE_GENERATIONS = 3;
++// Local on-device demo build: unlimited generations (upstream trial gate disabled).
++const MAX_FREE_GENERATIONS = 9999;
+ 
+ // --- Upstream: ACCESS_CODE helpers ---
+ 
+@@ -108,14 +109,8 @@ export async function middleware(request: NextRequest) {
+   // Read remaining trial count (read-only check)
+   const trialCookie = request.cookies.get(TRIAL_COOKIE)?.value;
+   let remaining = trialCookie !== undefined ? parseInt(trialCookie, 10) : MAX_FREE_GENERATIONS;
+-  if (isNaN(remaining) || remaining < 0) remaining = 0;
+-
+-  if (remaining <= 0) {
+-    return NextResponse.json(
+-      { error: 'trial_exhausted', message: 'Free trial exhausted. Please login to continue.' },
+-      { status: 403 },
+-    );
+-  }
++  // Local demo build: heal exhausted/stale trial cookies instead of blocking.
++  if (isNaN(remaining) || remaining <= 0) remaining = MAX_FREE_GENERATIONS;
+ 
+   return NextResponse.next();
+ }

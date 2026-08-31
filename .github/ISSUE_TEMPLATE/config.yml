@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Model usage Q&A
+    url: https://huggingface.co/CogEvol/CogEvol-4B-Q4_K_M-GGUF/discussions
+    about: Questions about the weights / quantization / prompting belong on the HuggingFace repo
+  - name: OpenMAIC app issues
+    url: https://github.com/THU-MAIC/OpenMAIC/issues
+    about: Bugs in the app itself (independent project) are tracked upstream
+  - name: Security disclosures
+    url: https://github.com/CogEvol/CogEvol-4B/blob/main/SECURITY.md
+    about: Please do not open public issues for security problems — see SECURITY.md

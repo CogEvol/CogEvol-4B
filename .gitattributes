@@ -1,0 +1,13 @@
+# Normalize text files; keep binaries intact.
+* text=auto
+
+# Scripts must stay LF (they run on macOS/Linux; CRLF breaks shebangs)
+*.sh   text eol=lf
+*.py   text eol=lf
+*.cff  text eol=lf
+
+# Patches are whitespace-sensitive
+*.patch text eol=lf
+
+*.png  binary
+*.gguf binary

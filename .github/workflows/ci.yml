@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Shell scripts parse
+        run: |
+          for s in scripts/*.sh; do bash -n "$s"; done
+          echo "bash -n OK"
+
+      - name: Eval scripts import and expose CLI
+        run: |
+          python3 -m py_compile eval/*.py
+          python3 eval/slide_eval.py --help > /dev/null
+          python3 eval/html_eval.py --help > /dev/null
+          echo "py OK"
+
+      - name: Sample data files parse
+        run: |
+          python3 - <<'EOF'
+          import json, glob
+          for path in sorted(glob.glob("eval/samples/*.jsonl")):
+              rows = [json.loads(l) for l in open(path)]
+              assert rows, f"{path} is empty"
+              print(f"{path}: {len(rows)} rows OK")
+          EOF
+
+      - name: OpenMAIC patch is a well-formed unified diff
+        working-directory: ${{ runner.temp }}
+        run: |
+          git apply --stat  "$GITHUB_WORKSPACE/patches/openmaic-live/openmaic-live-offline-on-device.patch" > /dev/null
+          git apply --numstat "$GITHUB_WORKSPACE/patches/openmaic-live/openmaic-live-offline-on-device.patch" > /dev/null
+          echo "patch parses OK"

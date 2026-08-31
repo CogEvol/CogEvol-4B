@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an improvement to the repo, scripts, or patch
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing or inconvenient today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like instead?
+      description: A sketch of the behavior you want — command line, output, doc section, anything
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Your use case, hardware, or links that help us understand

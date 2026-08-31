@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: >-
+  If CogEvol-4B is useful to you, please cite it.
+  The model weights (Apache 2.0) live on HuggingFace.
+title: CogEvol-4B
+subtitle: On-Device Learning-Environment Generation
+authors:
+  - name: CogEvol Team
+type: software
+repository-code: "https://github.com/CogEvol/CogEvol-4B"
+identifiers:
+  - type: url
+    value: "https://huggingface.co/CogEvol/CogEvol-4B"
+    description: Model weights (BF16, Apache 2.0)
+  - type: url
+    value: "https://huggingface.co/CogEvol/CogEvol-4B-Q4_K_M-GGUF"
+    description: Q4_K_M GGUF build for llama.cpp (Apache 2.0)
+license: MIT
+year: 2026
+keywords:
+  - learning-environment-generation
+  - llama.cpp
+  - gguf
+  - on-device
+  - qwen
+  - rlhf

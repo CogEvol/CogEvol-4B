@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in this repo does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue.
+        The more of the below you can fill in, the faster we can reproduce it.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - scripts/serve.sh (model serving)
+        - llama.cpp build / Metal patch
+        - OpenMAIC integration (Path A env vars)
+        - OpenMAIC integration (Path B patch)
+        - eval scripts (slide_eval.py / html_eval.py)
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS + hardware + llama.cpp version (e.g. macOS 13.3, M2 Pro 16GB, llama.cpp 0.3.0)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the symptom, plus the exact command you ran
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Terminal output, `cogevol-4b-server.log` tail, browser console — anything that shows the failure
+      render: shell
+  - type: textarea
+    id: expectation
+    attributes:
+      label: What did you expect?

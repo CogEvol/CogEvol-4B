@@ -1,0 +1,16 @@
+# model weights — download from HuggingFace, never commit
+*.gguf
+
+# eval outputs
+eval/out_slide/
+eval/out_html/
+
+# python
+__pycache__/
+*.pyc
+
+# local logs
+*.log
+
+# macOS
+.DS_Store
