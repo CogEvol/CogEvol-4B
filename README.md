@@ -78,6 +78,24 @@ Slide output at Q4_K_M vs BF16, same brief, temperature 0 (rendered by the produ
 | Prefill (long course prompts, ~4k tokens) | ~450–500 tok/s |
 | CPU-only fallback (`-ngl 0`) on laptop-class machines | ~18–24 tok/s — works, just slower |
 
+### Measured on a CPU-only laptop (M1 Pro, 16 GB, macOS 13.2, `serve.sh` CPU fallback)
+
+Same server flags — Metal unavailable on this machine, so llama.cpp runs on CPU. Raw-server
+numbers plus end-to-end timings for one course generated inside the OpenMAIC app:
+
+| Workload | Result |
+|---|---|
+| Server raw | prefill ~30–45 tok/s · generation ~6–12 tok/s (slows as the slot's context grows) |
+| Course outline + agent profiles | ~2.5 min |
+| One **slide** page in-app | ~7 min (brief expand ~30 s + slide JSON ~4–5 min + teacher actions ~2 min) |
+| One **interactive** page in-app | ~12–20 min (HTML output is several × longer than slide JSON) |
+
+Two CPU-specific effects worth knowing (details in §10): the app's page prompts carry ~10k
+tokens of production templates, so the first prefill on a cold server takes ~5 min —
+llama-server's prefix cache skips it for every later call in the same server process. And a
+single in-app call can exceed Node's default 5-minute fetch timeout, which the patch fixes
+(§7 Path B).
+
 ## 2. Repository layout
 
 ```
@@ -91,7 +109,7 @@ CogEvol-4B/
 │   └── fetch-offline-assets.sh    # mirror katex/tailwind/codemirror for offline widgets
 ├── patches/
 │   ├── openmaic/
-│   │   └── openmaic-offline-on-device.patch     # brief expander + offline widgets (10 files vs public main)
+│   │   └── openmaic-offline-on-device.patch     # brief expander + offline widgets + long-call timeout fix (11 files vs public main)
 │   └── llama-cpp/
 │       └── macos13-metal-buffer-fix.md             # GGML_ASSERT(buf_dst) crash fix
 ├── eval/
@@ -256,7 +274,12 @@ own test suite stays green (136/136 in `packages/@openmaic/generation`):
    consumers of the generation package keep the previous behavior;
 2. **Makes generated interactive widgets render offline**: KaTeX is served from the app
    itself, the Tailwind/CodeMirror CDNs the model emits are rewritten to local mirrors,
-   and any remaining external reference is stripped (see §8).
+   and any remaining external reference is stripped (see §8);
+3. **Removes Node's default 5-minute fetch timeout** (new `instrumentation.ts`): one
+   in-app page call runs 5–15 minutes on CPU-class machines, and stock undici aborts
+   anything longer with `Headers Timeout Error` — after which the app retries and fails
+   forever. The patch registers a global undici dispatcher with no header/body timeout
+   (safe here: the app only ever talks to `127.0.0.1`).
 
 ```bash
 git clone https://github.com/THU-MAIC/OpenMAIC && cd OpenMAIC
@@ -267,10 +290,14 @@ git checkout f6cf8fd4                   # the commit the patch is validated agai
 
 pnpm install
 pnpm build
-pnpm start -- -p 3200      # http://localhost:3200
+pnpm start -p 3200         # http://localhost:3200
 ```
 
-> **When upstream moves.** The patch touches 10 files and is mostly additive; if a newer
+> **Why no `--`?** With pnpm, `pnpm start -- -p 3200` forwards the `--` verbatim to
+> `next start`, which then parses `-p` as a directory (`Invalid project directory .../-p`).
+> pnpm already passes arguments through without it.
+
+> **When upstream moves.** The patch touches 11 files and is mostly additive; if a newer
 > OpenMAIC commit has drifted, `apply-openmaic-patch.sh` dry-runs first and tells you.
 > Either pin to `f6cf8fd4`, or rebase the patch by hand — CI re-checks the pinned base on
 > every push, so a drifted patch fails loudly instead of silently.
@@ -278,8 +305,10 @@ pnpm start -- -p 3200      # http://localhost:3200
 ### What you should see (either path)
 
 1. The model selector shows exactly one local model, `cogevol-4b-q4_k_m`;
-2. Outline → per-scene generation → classroom opens (~3–6 min on an M2 Pro). Interactive
-   scenes render in an iframe — sliders, presets and run/pause/reset all work.
+2. Outline → per-scene generation → classroom opens (~3–6 min per page on an M2 Pro; on a
+   CPU-only laptop expect ~7 min per slide page and ~12–20 min per interactive page — see
+   the CPU table in §1). Interactive scenes render in an iframe — sliders, presets and
+   run/pause/reset all work.
 
 ## 8. Step 5 — Fully-offline demo
 
@@ -345,6 +374,18 @@ controls clickable).
   brief. They remain contract-valid; budget `max_tokens` accordingly.
 - **Token budgets**: slide → 8192; interactive HTML → 16384 with context ≥ 24576
   (a rich simulation page reaches ~19k characters ≈ 5k tokens).
+- **In-app page prompts are big**: production templates put ~9–10k tokens into every
+  scene-content call, vs ~200-token eval briefs. On CPU, the first such prefill on a
+  cold server takes ~5 min; llama-server's prompt-prefix cache then skips the shared
+  prefix for every later call in the same server process — so course #2 is much faster
+  than course #1, and restarting `llama-server` resets it.
+- **Generation slows as context grows**: on an M1 Pro CPU we measured ~12 tok/s at short
+  context but ~6 tok/s once the slot carries ~11k tokens. Page times grow over a long
+  course session.
+- **Fetch timeouts**: Node's undici aborts any request whose headers don't arrive within
+  5 minutes — shorter than many in-app CPU calls, and the app retries the doomed call
+  forever. The OpenMAIC patch (§7 Path B) disables it via a global undici dispatcher in
+  `instrumentation.ts`; keep that in place if you maintain a fork.
 - **Post-training lineage**: mix SFT → slide RL → HTML RL; final RL checkpoint
   `html-4b-rl-v5-step249`; MTP head stripped at export (`--no-mtp` at conversion).
 - **Proxies**: if you run a local HTTP proxy (Clash etc.), it will happily hijack
@@ -360,6 +401,8 @@ controls clickable).
 | Model answers with endless reasoning / empty content | Serve with `--jinja --chat-template-kwargs '{"enable_thinking": false}'` (§6) |
 | `blk.32.attn_norm` missing at load | GGUF was converted without `--no-mtp` — requantize (§4) |
 | Generation cut off mid-HTML | Raise `-c` (≥ 24576) and request `max_tokens` 16384 |
+| Scene generation fails with `Headers Timeout Error`, app retries forever | The call ran past undici's default 5-min timeout — apply the patch (§7 Path B bundles the `instrumentation.ts` fix) and rebuild |
+| `next start` errors with `Invalid project directory .../-p` | You used `pnpm start -- -p 3200`; with pnpm the `--` reaches next verbatim — use `pnpm start -p 3200` (§7) |
 | App shows cloud providers / tries the network | `.env.local` lacks the `OLLAMA_*` block (§7 Path A); make sure no cloud keys are set |
 | Widgets unstyled, raw `\( ... \)` LaTeX on screen | Offline assets not installed → run `fetch-offline-assets.sh`, rebuild the app |
 | `apply-openmaic-patch.sh` reports drift | Your checkout is newer than the validated base — pin `f6cf8fd4` or rebase the patch (README §7 Path B) |

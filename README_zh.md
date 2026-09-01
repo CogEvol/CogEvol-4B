@@ -77,6 +77,23 @@ Q4_K_M 与 BF16 在同一条 brief、temperature 0 下的 slide 输出（生产�
 | Prefill（长课程 prompt，约 4k token） | ~450–500 tok/s |
 | 纯 CPU 回退（`-ngl 0`，笔记本级设备） | ~18–24 tok/s —— 能跑，只是慢 |
 
+### 纯 CPU 笔记本实测（M1 Pro / 16 GB / macOS 13.2 / `serve.sh` 自动 CPU 回退）
+
+同一组服务参数 —— 该机器上 Metal 不可用，llama.cpp 跑 CPU。原始服务速度 + OpenMAIC
+应用内生成一门课的端到端耗时：
+
+| 工作负载 | 结果 |
+|---|---|
+| 服务原始速度 | prefill ~30–45 tok/s · 生成 ~6–12 tok/s（上下文越长越慢） |
+| 课程大纲 + Agent 人设 | ~2.5 分钟 |
+| 应用内一页 **slide** | ~7 分钟（brief 扩写 ~30 s + slide JSON ~4–5 分钟 + 教师动作 ~2 分钟） |
+| 应用内一页**互动页** | ~12–20 分钟（HTML 输出比 slide JSON 长数倍） |
+
+两个 CPU 特有效应值得知道（详见第 10 节）：应用的页面 prompt 自带 ~10k token 的生产
+模板，冷服务首次 prefill 约 5 分钟 —— 同一 server 进程内，后续调用会命中 llama-server
+的前缀缓存而跳过它；另外单次应用内调用可能超过 Node 默认的 5 分钟 fetch 超时，补丁已
+修复（第 7 节路径 B）。
+
 ## 2. 仓库结构
 
 ```
@@ -90,7 +107,7 @@ CogEvol-4B/
 │   └── fetch-offline-assets.sh    # 本地化 katex/tailwind/codemirror（断网渲染用）
 ├── patches/
 │   ├── openmaic/
-│   │   └── openmaic-offline-on-device.patch     # brief 扩写器 + 断网组件（对公开 main，10 个文件）
+│   │   └── openmaic-offline-on-device.patch     # brief 扩写器 + 断网组件 + 长调用超时修复（对公开 main，11 个文件）
 │   └── llama-cpp/
 │       └── macos13-metal-buffer-fix.md             # GGML_ASSERT(buf_dst) 崩溃修复
 ├── eval/
@@ -249,7 +266,11 @@ OpenMAIC commit `f6cf8fd4`（2026-08-30）验证，上游自己的测试套件�
    route 提供课程上下文时才运行（打过补丁的 `scene-content` route 一直提供），包的
    其他使用方行为不变；
 2. **让生成的互动组件断网可渲染**：KaTeX 改由应用自身同源提供，模型输出的
-   Tailwind / CodeMirror CDN 引用重写到本地镜像，其余外链一律剥离（见第 8 节）。
+   Tailwind / CodeMirror CDN 引用重写到本地镜像，其余外链一律剥离（见第 8 节）；
+3. **解除 Node 默认的 5 分钟 fetch 超时**（新增 `instrumentation.ts`）：CPU 级设备上
+   应用内单页调用要跑 5–15 分钟，原生 undici 会以 `Headers Timeout Error` 掐断 ——
+   之后应用还会无限重试、永远失败。补丁注册了一个不带 header/body 超时的全局
+   undici dispatcher（这里安全：应用只会访问 `127.0.0.1`）。
 
 ```bash
 git clone https://github.com/THU-MAIC/OpenMAIC && cd OpenMAIC
@@ -260,10 +281,13 @@ git checkout f6cf8fd4                   # 补丁验证所基于的 commit
 
 pnpm install
 pnpm build
-pnpm start -- -p 3200      # http://localhost:3200
+pnpm start -p 3200         # http://localhost:3200
 ```
 
-> **上游更新之后。** 补丁涉及 10 个文件、以新增为主；若更新的 OpenMAIC commit 已
+> **为什么不带 `--`？** pnpm 会把 `--` 原样转发给 `next start`，后者把 `-p` 解析成
+> 目录名（报 `Invalid project directory .../-p`）。pnpm 本身不需要 `--` 就能透传参数。
+
+> **上游更新之后。** 补丁涉及 11 个文件、以新增为主；若更新的 OpenMAIC commit 已
 > 漂移，`apply-openmaic-patch.sh` 会先 dry-run 并明确报错。要么钉在 `f6cf8fd4`，
 > 要么手工重放补丁 —— CI 每次推送都会对钉定基线复检，补丁漂移会响亮失败而不是
 > 静默失效。
@@ -271,7 +295,8 @@ pnpm start -- -p 3200      # http://localhost:3200
 ### 两条路都会看到
 
 1. 模型选择器里只有一个本地模型 `cogevol-4b-q4_k_m`；
-2. 大纲 → 逐页生成 → 课堂打开（M2 Pro 约 3–6 分钟）。互动场景在 iframe 中渲染 ——
+2. 大纲 → 逐页生成 → 课堂打开（M2 Pro 每页约 3–6 分钟；纯 CPU 笔记本一页 slide 约
+   7 分钟、一页互动页约 12–20 分钟 —— 见第 1 节 CPU 表）。互动场景在 iframe 中渲染 ——
    滑杆、预设、启动/暂停/重置全部可用。
 
 ## 8. 第五步 — 全程断网演示
@@ -331,6 +356,15 @@ python3 html_eval.py --port 8081 \
   但 `max_tokens` 要给够。
 - **Token 预算**：slide → 8192；互动 HTML → 16384 且上下文 ≥ 24576（一个内容丰富的
   模拟页可达 ~19k 字符 ≈ 5k token）。
+- **应用内的页面 prompt 很大**：生产模板让每次 scene-content 调用带上 ~9–10k token，
+  而评测 brief 只有 ~200 token。CPU 上冷服务首次 prefill 约 5 分钟；此后同一 server
+  进程内的调用会命中 llama-server 的 prompt 前缀缓存、跳过共享前缀 —— 所以第二门课
+  明显快于第一门，重启 `llama-server` 即复位。
+- **生成速度随上下文变长而下降**：M1 Pro CPU 实测短上下文 ~12 tok/s，槽位累积到
+  ~11k token 后掉到 ~6 tok/s。一节课越往后越慢。
+- **fetch 超时**：Node 的 undici 默认在 5 分钟内等不到响应头就断开 —— 比应用内许多
+  CPU 调用更短，而且应用会无限重试这条注定失败的调用。OpenMAIC 补丁（第 7 节路径 B）
+  通过 `instrumentation.ts` 里的全局 dispatcher 解除了它；如果你维护 fork，请保留。
 - **后训练脉络**：mix SFT → slide RL → HTML RL；RL 终版 ckpt `html-4b-rl-v5-step249`；
   导出时已剥离 MTP 头（转换带 `--no-mtp`）。
 - **代理**：如果你跑着本地 HTTP 代理（Clash 等），它会劫持 `127.0.0.1` 的请求，
@@ -346,6 +380,8 @@ python3 html_eval.py --port 8081 \
 | 模型一直输出思考 / 内容为空 | 用 `--jinja --chat-template-kwargs '{"enable_thinking": false}'` 启动（第 6 节） |
 | 加载时报缺 `blk.32.attn_norm` | GGUF 转换时没带 `--no-mtp` —— 重新量化（第 4 节） |
 | HTML 生成到一半被截断 | 调大 `-c`（≥ 24576），请求 `max_tokens` 16384 |
+| 页面生成报 `Headers Timeout Error`、应用无限重试 | 调用超过了 undici 默认 5 分钟超时 —— 应用补丁（第 7 节路径 B 已含 `instrumentation.ts` 修复）后重新 build |
+| `next start` 报 `Invalid project directory .../-p` | 用了 `pnpm start -- -p 3200`；pnpm 会把 `--` 原样透传 —— 改用 `pnpm start -p 3200`（第 7 节） |
 | 应用里出现云厂商供应商 / 走了网络 | `.env.local` 缺 `OLLAMA_*` 配置（第 7 节路径 A）；确认没配云厂商 Key |
 | 组件无样式、屏幕上出现 `\( ... \)` 原码 | 断网资源未安装 → 跑 `fetch-offline-assets.sh`，重新 build 应用 |
 | `apply-openmaic-patch.sh` 报漂移 | 检出比验证基线新 —— 钉在 `f6cf8fd4` 或手工重放补丁（第 7 节路径 B） |

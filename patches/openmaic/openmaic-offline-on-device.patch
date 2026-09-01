@@ -39,6 +39,26 @@ index d3ac5809..13e964cd 100644
        targetLanguage: userLocale || undefined,
        userRequirements: requirements,
        allowProceduralSkill: vocationalActive,
+diff --git a/instrumentation.ts b/instrumentation.ts
+index 93105157..f65b951c 100644
+--- a/instrumentation.ts
++++ b/instrumentation.ts
+@@ -15,6 +15,15 @@ export async function register(): Promise<void> {
+   // want; the persistence stack is Node-only.
+   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+ 
++  // Local llama-server on CPU can take >10 min per LLM call (10k-token page
++  // prompts, ~12 tok/s generation); undici's default 5-minute headers timeout
++  // aborts mid-generation ("Headers Timeout Error"). This deployment talks
++  // only to localhost, so disable both timeouts via the shared global
++  // dispatcher (Symbol.for-keyed, so Node's built-in fetch picks it up).
++  const { Agent, setGlobalDispatcher } = await import('undici');
++  setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
++  console.log('[instrumentation] undici headers/body timeouts disabled (local LLM)');
++
+   // Imported dynamically so the Edge bundle never pulls in `pg`.
+   const { startAssetCollectorSchedule } =
+     await import('@/lib/persistence/asset-collector-schedule');
 diff --git a/packages/@openmaic/generation/src/brief-expander.ts b/packages/@openmaic/generation/src/brief-expander.ts
 new file mode 100644
 index 00000000..93cff6d5

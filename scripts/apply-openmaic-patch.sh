@@ -7,7 +7,7 @@
 # The patch is validated against public OpenMAIC commit f6cf8fd4 (2026-08-30).
 # If your checkout is newer and the patch no longer applies, either
 #   git checkout f6cf8fd4   (in the OpenMAIC repo)
-# or rebase the patch by hand — it touches 10 files and is mostly additive.
+# or rebase the patch by hand — it touches 11 files and is mostly additive.
 set -e
 APP="${1:?usage: apply-openmaic-patch.sh /path/to/OpenMAIC}"
 [ -f "$APP/package.json" ] || { echo "$APP does not look like the OpenMAIC app root (no package.json)"; exit 1; }
@@ -24,7 +24,7 @@ else
   echo "❌ patch does not apply cleanly — your checkout has moved past the validated base."
   echo "   Validated against public OpenMAIC commit f6cf8fd4 (2026-08-30)."
   echo "   Either: git checkout f6cf8fd4"
-  echo "   Or rebase the patch by hand (10 files, mostly additive) — see patches/openmaic/."
+  echo "   Or rebase the patch by hand (11 files, mostly additive) — see patches/openmaic/."
   exit 1
 fi
 echo "[patch] ✅ applied: brief expander (opt-in via courseContext) + offline asset rewriting"
@@ -45,4 +45,4 @@ fi
 echo "next steps:"
 echo "  1. ./scripts/fetch-offline-assets.sh $APP   # mirror katex/tailwind/codemirror for offline use"
 echo "  2. cd $APP && pnpm install && pnpm build"
-echo "  3. cd $APP && pnpm start -- -p 3200"
+echo "  3. cd $APP && pnpm start -p 3200   # no \"--\": pnpm forwards it verbatim and next mis-parses -p"
