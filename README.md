@@ -3,6 +3,7 @@
 **A 4B-post-trained model that turns a one-line course brief into a complete learning artifact — structured slide JSON *and* self-contained interactive HTML — in a single forward pass, fully offline on a laptop.**
 
 <p align="center">
+  <a href="https://arxiv.org/abs/2608.30968"><img src="https://img.shields.io/badge/arXiv-2608.30968-b31b1b?style=flat-square" alt="arXiv:2608.30968"/></a>
   <a href="https://huggingface.co/CogEvol/CogEvol-4B"><img src="https://img.shields.io/badge/%F0%9F%A4%97_HF-Weights_(BF16)-FFD21E?style=flat-square" alt="HF weights"/></a>
   <a href="https://huggingface.co/CogEvol/CogEvol-4B-Q4_K_M-GGUF"><img src="https://img.shields.io/badge/%F0%9F%A4%97_HF-GGUF_(Q4__K__M)-FFD21E?style=flat-square" alt="HF GGUF"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Code_MIT-green?style=flat-square" alt="License: code MIT"/></a>
@@ -417,15 +418,18 @@ controls clickable).
   released under the **Apache 2.0** license.
 - **The OpenMAIC patch** modifies AGPL-3.0 code; combined works inherit AGPL-3.0.
 
-If CogEvol-4B is useful to you, cite us:
+If CogEvol-4B is useful to you, please cite the technical report
+([arXiv:2608.30968](https://arxiv.org/abs/2608.30968)):
 
 ```bibtex
-@misc{cogevol4b2026,
-  title  = {CogEvol-4B: On-Device Learning-Environment Generation},
-  author = {CogEvol Team},
-  year   = {2026},
-  url    = {https://github.com/CogEvol/CogEvol-4B},
-  note   = {Weights: https://huggingface.co/CogEvol/CogEvol-4B (Apache 2.0)}
+@misc{tu2026cogevolefficientreliablelearning,
+      title={CogEvol: Towards Efficient and Reliable Learning Environment Generation},
+      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Haoxuan Li and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
+      year={2026},
+      eprint={2608.30968},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2608.30968}
 }
 ```
 

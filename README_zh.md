@@ -3,6 +3,7 @@
 **一个 4B 后训练模型：输入一句话课程需求，单次前向直接产出完整学习工件 —— 结构化 slide JSON 与自包含可交互 HTML —— 笔记本本地、全程断网可跑。**
 
 <p align="center">
+  <a href="https://arxiv.org/abs/2608.30968"><img src="https://img.shields.io/badge/arXiv-2608.30968-b31b1b?style=flat-square" alt="arXiv:2608.30968"/></a>
   <a href="https://huggingface.co/CogEvol/CogEvol-4B"><img src="https://img.shields.io/badge/%F0%9F%A4%97_HF-Weights_(BF16)-FFD21E?style=flat-square" alt="HF weights"/></a>
   <a href="https://huggingface.co/CogEvol/CogEvol-4B-Q4_K_M-GGUF"><img src="https://img.shields.io/badge/%F0%9F%A4%97_HF-GGUF_(Q4__K__M)-FFD21E?style=flat-square" alt="HF GGUF"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Code_MIT-green?style=flat-square" alt="License: code MIT"/></a>
@@ -396,15 +397,18 @@ python3 html_eval.py --port 8081 \
   以 **Apache 2.0** 协议开源。
 - **OpenMAIC 补丁**修改的是 AGPL-3.0 代码；结合作品继承 AGPL-3.0。
 
-如果 CogEvol-4B 对你有用，欢迎引用：
+如果 CogEvol-4B 对你有用，欢迎引用技术报告
+（[arXiv:2608.30968](https://arxiv.org/abs/2608.30968)）：
 
 ```bibtex
-@misc{cogevol4b2026,
-  title  = {CogEvol-4B: On-Device Learning-Environment Generation},
-  author = {CogEvol Team},
-  year   = {2026},
-  url    = {https://github.com/CogEvol/CogEvol-4B},
-  note   = {Weights: https://huggingface.co/CogEvol/CogEvol-4B (Apache 2.0)}
+@misc{tu2026cogevolefficientreliablelearning,
+      title={CogEvol: Towards Efficient and Reliable Learning Environment Generation},
+      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Haoxuan Li and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
+      year={2026},
+      eprint={2608.30968},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2608.30968}
 }
 ```
 

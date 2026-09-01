@@ -15,6 +15,61 @@ identifiers:
   - type: url
     value: "https://huggingface.co/CogEvol/CogEvol-4B-Q4_K_M-GGUF"
     description: Q4_K_M GGUF build for llama.cpp (Apache 2.0)
+preferred-citation:
+  type: article
+  title: "CogEvol: Towards Efficient and Reliable Learning Environment Generation"
+  authors:
+    - family-names: Tu
+      given-names: Shangqing
+    - family-names: Zhang-Li
+      given-names: Daniel
+    - family-names: Wang
+      given-names: Yucheng
+    - family-names: Gan
+      given-names: Shiyu
+    - family-names: Wang
+      given-names: Yanpeng
+    - family-names: Rong
+      given-names: Huiqiang
+    - family-names: Chen
+      given-names: Mofei
+    - family-names: Yang
+      given-names: Shen
+    - family-names: Chen
+      given-names: Yini
+    - family-names: Duan
+      given-names: Yinuo
+    - family-names: Li
+      given-names: Haoxuan
+    - family-names: Liu
+      given-names: Binglin
+    - family-names: He
+      given-names: Ye
+    - family-names: Zheng
+      given-names: Danqi
+    - family-names: Hao
+      given-names: Zhanxin
+    - family-names: Wu
+      given-names: Yuxuan
+    - family-names: Tao
+      given-names: Mengting
+    - family-names: Liu
+      given-names: Yuqiu
+    - family-names: Yu
+      given-names: Jifan
+    - family-names: Li
+      given-names: Juanzi
+    - family-names: Xu
+      given-names: Bin
+    - family-names: Hou
+      given-names: Lei
+    - family-names: Liu
+      given-names: Huiqin
+    - family-names: Zhang
+      given-names: Yu
+  year: 2026
+  journal: "arXiv preprint arXiv:2608.30968"
+  url: "https://arxiv.org/abs/2608.30968"
 license: MIT
 year: 2026
 keywords:
