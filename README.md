@@ -33,18 +33,25 @@
 
 ## Table of contents
 
-1. [What CogEvol-4B does](#1-what-cogevol-4b-does)
-2. [Repository layout](#2-repository-layout)
-3. [Requirements](#3-requirements)
-4. [Step 1 — Download the model](#4-step-1--download-the-model)
-5. [Step 2 — Build llama.cpp](#5-step-2--build-llamacpp)
-6. [Step 3 — Serve the model](#6-step-3--serve-the-model)
-7. [Step 4 — Run the OpenMAIC app end-to-end](#7-step-4--run-the-openmaic-app-end-to-end)
-8. [Step 5 — Fully-offline demo](#8-step-5--fully-offline-demo)
-9. [Evaluation](#9-evaluation)
-10. [Technical notes](#10-technical-notes)
-11. [Troubleshooting](#11-troubleshooting)
-12. [License & citation](#12-license--citation)
+- [CogEvol-4B — On-Device Learning-Environment Generation](#cogevol-4b--on-device-learning-environment-generation)
+  - [Table of contents](#table-of-contents)
+  - [1. What CogEvol-4B does](#1-what-cogevol-4b-does)
+    - [Measured on the reference device (M2 Pro, 16 GB, macOS 13.3, Metal)](#measured-on-the-reference-device-m2-pro-16-gb-macos-133-metal)
+    - [Measured on a CPU-only laptop (M1 Pro, 16 GB, macOS 13.2, `serve.sh` CPU fallback)](#measured-on-a-cpu-only-laptop-m1-pro-16-gb-macos-132-servesh-cpu-fallback)
+  - [2. Repository layout](#2-repository-layout)
+  - [3. Requirements](#3-requirements)
+  - [4. Step 1 — Download the model](#4-step-1--download-the-model)
+  - [5. Step 2 — Build llama.cpp](#5-step-2--build-llamacpp)
+  - [6. Step 3 — Serve the model](#6-step-3--serve-the-model)
+  - [7. Step 4 — Run the OpenMAIC app end-to-end](#7-step-4--run-the-openmaic-app-end-to-end)
+    - [Path A — stock OpenMAIC, no patch (works on current `main`)](#path-a--stock-openmaic-no-patch-works-on-current-main)
+    - [Path B — the on-device patch (brief expander + offline widgets)](#path-b--the-on-device-patch-brief-expander--offline-widgets)
+    - [What you should see (either path)](#what-you-should-see-either-path)
+  - [8. Step 5 — Fully-offline demo](#8-step-5--fully-offline-demo)
+  - [9. Evaluation](#9-evaluation)
+  - [10. Technical notes](#10-technical-notes)
+  - [11. Troubleshooting](#11-troubleshooting)
+  - [12. License \& citation](#12-license--citation)
 
 ---
 
@@ -423,8 +430,8 @@ If CogEvol-4B is useful to you, please cite the technical report
 
 ```bibtex
 @misc{tu2026cogevolefficientreliablelearning,
-      title={CogEvol: Towards Efficient and Reliable Learning Environment Generation},
-      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Haoxuan Li and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
+      title={CogEvol: Towards Efficient and Reliable Learning Environment Generation}, 
+      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
       year={2026},
       eprint={2608.30968},
       archivePrefix={arXiv},
