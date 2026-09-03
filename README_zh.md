@@ -403,7 +403,7 @@ python3 html_eval.py --port 8081 \
 ```bibtex
 @misc{tu2026cogevolefficientreliablelearning,
       title={CogEvol: Towards Efficient and Reliable Learning Environment Generation},
-      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Haoxuan Li and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
+      author={Shangqing Tu and Daniel Zhang-Li and Yucheng Wang and Shiyu Gan and Yanpeng Wang and Huiqiang Rong and Mofei Chen and Shen Yang and Yini Chen and Yinuo Duan and Binglin Liu and Ye He and Danqi Zheng and Zhanxin Hao and Yuxuan Wu and Mengting Tao and Yuqiu Liu and Jifan Yu and Juanzi Li and Bin Xu and Lei Hou and Huiqin Liu and Yu Zhang},
       year={2026},
       eprint={2608.30968},
       archivePrefix={arXiv},
